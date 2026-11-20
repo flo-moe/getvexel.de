@@ -92,7 +92,104 @@ function dashboardPage(user, pages, origin) {
 function editorPage(page = null) {
   const slug = page?.slug || '';
   const content = page?.html || '<h1>Meine neue Seite</h1>\n<p>Hallo Welt!</p>';
-  return htmlPage(page ? 'Seite bearbeiten' : 'Neue Seite', `<div class="top"><div class="brand">GetVexel</div><a class="button secondary" href="/dashboard">Zur Übersicht</a></div><h1>${page ? 'Seite bearbeiten' : 'Neue Seite erstellen'}</h1><div class="grid"><div class="card"><form id="editor"><label>Seitenname</label><input id="slug" name="slug" value="${escapeHtml(slug)}" ${page ? 'readonly' : ''} required pattern="[A-Za-z0-9_-]+" placeholder="meine-seite"><br><br><label>HTML-Inhalt</label><textarea id="html" name="html" style="min-height:520px">${escapeHtml(content)}</textarea><br><br><div class="actions"><button type="submit">${page ? 'Änderungen veröffentlichen' : 'Seite veröffentlichen'}</button></div></form></div><div class="card"><div class="top" style="margin-bottom:12px"><strong>Live-Vorschau</strong><button type="button" class="button secondary" id="refresh-preview">Aktualisieren</button></div><iframe id="preview" title="Live-Vorschau" sandbox="allow-scripts" style="width:100%;height:520px;border:0;border-radius:8px;background:white"></iframe></div></div><script>const htmlInput=document.querySelector('#html');const preview=document.querySelector('#preview');function updatePreview(){preview.srcdoc=htmlInput.value}htmlInput.addEventListener('input',updatePreview);document.querySelector('#refresh-preview').addEventListener('click',updatePreview);updatePreview();document.querySelector('#editor').addEventListener('submit',async event=>{event.preventDefault();const slug=document.querySelector('#slug').value;const html=htmlInput.value;const published=window.open('about:blank','_blank');const response=await fetch(${page ? "'/api/pages/'+encodeURIComponent(slug)" : "'/api/pages'"},{method:${page ? "'PUT'" : "'POST'"},headers:{'Content-Type':'application/json'},body:JSON.stringify({slug,html})});if(response.ok){published.location.href='/' + encodeURIComponent(slug)}else{if(published)published.close();alert(await response.text())}})</script>`);
+  const pageJson = JSON.stringify(content);
+  const body = `
+    <style>
+      .studio{display:grid;grid-template-columns:150px minmax(420px,1fr) 250px;min-height:650px;gap:12px}
+      .panel{background:#111c30;border:1px solid #263652;border-radius:12px;padding:12px}
+      .toolbox button{width:100%;margin:7px 0;text-align:left}.canvas-wrap{overflow:auto;padding:18px}
+      .canvas-frame{width:100%;height:610px;border:0;border-radius:6px;background:white}
+      .properties label{display:block;margin-top:12px}.properties input,.properties textarea{width:100%;margin-top:5px}
+      .properties textarea{min-height:70px}.tabs{display:flex;gap:8px;margin-bottom:10px}
+      .tabs button.active{outline:2px solid #93c5fd}#code{height:610px;font-family:ui-monospace,monospace}
+      #image-upload{display:none}.upload-label{display:block!important;width:100%;padding:10px;margin:7px 0!important;text-align:left;background:#263652;border-radius:8px;cursor:pointer}
+      @media(max-width:900px){.studio{grid-template-columns:1fr}.canvas-frame{height:600px}}
+    </style>
+    <div class="top"><div class="brand">GetVexel Studio</div><div class="actions"><a class="button secondary" href="/dashboard">Zur Übersicht</a><button class="button" id="publish" type="button">Veröffentlichen</button></div></div>
+    <div class="tabs"><button type="button" id="visual-tab" class="active">Design-Ansicht</button><button type="button" id="code-tab">HTML/CSS/JS</button></div>
+    <div id="visual-mode" class="studio">
+      <aside class="panel toolbox"><strong>Elemente</strong>
+        <button type="button" data-type="heading">Überschrift</button>
+        <button type="button" data-type="text">Textabsatz</button>
+        <button type="button" data-type="button">Button</button>
+        <button type="button" data-type="box">Box</button>
+        <label class="upload-label" for="image-upload">Bild hochladen</label><input id="image-upload" type="file" accept="image/*">
+      </aside>
+      <div class="panel canvas-wrap"><iframe id="canvas" class="canvas-frame" title="Design-Canvas" sandbox="allow-scripts allow-modals"></iframe></div>
+      <aside class="panel properties"><strong>Ausgewähltes Element</strong>
+        <label>Seitenname</label><input id="slug" value="${escapeHtml(slug)}" ${page ? 'readonly' : ''} required pattern="[A-Za-z0-9_-]+">
+        <label>Text</label><textarea id="element-text"></textarea>
+        <label>Breite (px)</label><input id="element-width" type="number" min="20">
+        <label>Höhe (px)</label><input id="element-height" type="number" min="20">
+        <label>X-Position</label><input id="element-left" type="number">
+        <label>Y-Position</label><input id="element-top" type="number">
+        <label>Hintergrund</label><input id="element-bg" type="color" value="#ffffff">
+        <label>Textfarbe</label><input id="element-color" type="color" value="#111111">
+        <button class="danger" id="delete-element" type="button">Element löschen</button>
+      </aside>
+    </div>
+    <div id="code-mode" hidden><textarea id="code" aria-label="HTML, CSS und JavaScript">${escapeHtml(content)}</textarea></div>
+    <script>
+      const canvas=document.querySelector('#canvas');
+      const code=document.querySelector('#code');
+      const visual=document.querySelector('#visual-mode');
+      const codeMode=document.querySelector('#code-mode');
+      const visualTab=document.querySelector('#visual-tab');
+      const codeTab=document.querySelector('#code-tab');
+      let current=${pageJson};
+
+      function editorScript(){
+        return String.raw\`<script>
+          document.querySelectorAll('*').forEach(el=>{if(el.matches('body,html,head,style,script'))return;el.setAttribute('data-gve','true')});
+          let selected=null,drag=false,startX=0,startY=0,baseX=0,baseY=0;
+          function select(el){if(selected)selected.classList.remove('gve-selected');selected=el;if(el){el.classList.add('gve-selected');sendInfo()}}
+          function sendInfo(){if(!selected)return;const r=selected.getBoundingClientRect(),s=getComputedStyle(selected);parent.postMessage({type:'gve-select',text:selected.innerText||selected.alt||'',width:Math.round(r.width),height:Math.round(r.height),left:Math.round(r.left),top:Math.round(r.top),bg:s.backgroundColor,color:s.color},'*')}
+          document.addEventListener('pointerdown',e=>{const el=e.target.closest('[data-gve]');if(!el)return;select(el);const r=el.getBoundingClientRect();drag=true;startX=e.clientX;startY=e.clientY;baseX=r.left;baseY=r.top;e.preventDefault();el.setPointerCapture?.(e.pointerId)});
+          document.addEventListener('pointermove',e=>{if(!drag||!selected)return;selected.style.position='absolute';selected.style.left=(baseX+e.clientX-startX)+'px';selected.style.top=(baseY+e.clientY-startY)+'px';sendInfo()});
+          document.addEventListener('pointerup',()=>drag=false);
+          document.addEventListener('dblclick',e=>{const el=e.target.closest('[data-gve]');if(!el)return;el.setAttribute('contenteditable','true');el.focus()});
+          addEventListener('message',e=>{const m=e.data;if(!m||!selected)return;if(m.type==='gve-set'){if(m.key==='text'){if(selected.tagName==='IMG')selected.alt=m.value;else selected.innerText=m.value}if(m.key==='width')selected.style.width=m.value+'px';if(m.key==='height')selected.style.height=m.value+'px';if(m.key==='left')selected.style.position='absolute',selected.style.left=m.value+'px';if(m.key==='top')selected.style.position='absolute',selected.style.top=m.value+'px';if(m.key==='bg')selected.style.background=m.value;if(m.key==='color')selected.style.color=m.value;sendInfo()}if(m.type==='gve-delete'){selected.remove();selected=null}if(m.type==='gve-add'){const el=document.createElement(m.tag);el.setAttribute('data-gve','true');el.style.position='absolute';el.style.left='40px';el.style.top='40px';if(m.tag==='h1'){el.textContent='Neue Überschrift';el.style.fontSize='32px'}if(m.tag==='p'){el.textContent='Neuer Textabsatz'}if(m.tag==='button'){el.textContent='Klick mich';el.style.padding='12px 18px'}if(m.tag==='div'){el.style.width='220px';el.style.height='140px';el.style.background='#dbeafe'}if(m.tag==='img'){el.src=m.url||'';el.style.width='220px'}document.body.appendChild(el);select(el)}if(m.type==='gve-serialize'){document.querySelectorAll('.gve-selected').forEach(el=>el.classList.remove('gve-selected'));document.querySelectorAll('[contenteditable]').forEach(el=>el.removeAttribute('contenteditable'));document.querySelectorAll('[data-gve]').forEach(el=>el.removeAttribute('data-gve'));parent.postMessage({type:'gve-html',html:'<!doctype html>'+document.documentElement.outerHTML},'*')}});
+        <\/script>\`;
+      }
+
+      function render(){
+        let value=current;
+        if(!value.toLowerCase().includes('<html'))value='<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>html,body{min-height:100%;margin:0}.gve-selected{outline:3px solid #3b82f6!important}</style></head><body>'+value+'</body></html>';
+        else value=value.replace('</head>','<style>html,body{min-height:100%;margin:0}.gve-selected{outline:3px solid #3b82f6!important}</style></head>');
+        canvas.srcdoc=value.replace('</body>',editorScript()+'</body>');
+      }
+
+      visualTab.onclick=()=>{visual.hidden=false;codeMode.hidden=true;visualTab.classList.add('active');codeTab.classList.remove('active');current=code.value;render()};
+      codeTab.onclick=()=>{visual.hidden=true;codeMode.hidden=false;codeTab.classList.add('active');visualTab.classList.remove('active')};
+      code.addEventListener('input',()=>{current=code.value;render()});
+      document.querySelectorAll('[data-type]').forEach(button=>button.onclick=()=>canvas.contentWindow.postMessage({type:'gve-add',tag:{heading:'h1',text:'p',button:'button',box:'div'}[button.dataset.type]},'*'));
+
+      document.querySelector('#image-upload').addEventListener('change',async event=>{
+        const file=event.target.files[0];if(!file)return;
+        const form=new FormData();form.append('file',file);
+        const response=await fetch('/api/assets',{method:'POST',body:form});
+        if(!response.ok){alert(await response.text());return}
+        const result=await response.json();canvas.contentWindow.postMessage({type:'gve-add',tag:'img',url:result.url},'*');event.target.value='';
+      });
+
+      const properties={text:'element-text',width:'element-width',height:'element-height',left:'element-left',top:'element-top',bg:'element-bg',color:'element-color'};
+      addEventListener('message',e=>{const m=e.data;if(m.type==='gve-select'){document.querySelector('#element-text').value=m.text||'';document.querySelector('#element-width').value=m.width||'';document.querySelector('#element-height').value=m.height||'';document.querySelector('#element-left').value=m.left||'';document.querySelector('#element-top').value=m.top||''}});
+      ['text','width','height','left','top','bg','color'].forEach(key=>document.querySelector('#'+properties[key]).addEventListener('input',event=>canvas.contentWindow.postMessage({type:'gve-set',key,value:event.target.value},'*')));
+      document.querySelector('#delete-element').onclick=()=>canvas.contentWindow.postMessage({type:'gve-delete'},'*');
+
+      let pendingResolve=null;addEventListener('message',e=>{if(e.data.type==='gve-html'&&pendingResolve){pendingResolve(e.data.html);pendingResolve=null}});
+      async function serialize(){return new Promise(resolve=>{pendingResolve=resolve;canvas.contentWindow.postMessage({type:'gve-serialize'},'*');setTimeout(()=>{if(pendingResolve){pendingResolve=null;resolve(current)}},800)})}
+      render();
+      document.querySelector('#publish').onclick=async()=>{
+        const slug=document.querySelector('#slug').value;
+        const html=codeMode.hidden?await serialize():code.value;
+        const published=window.open('about:blank','_blank');
+        const response=await fetch(${page ? "'/api/pages/'+encodeURIComponent(slug)" : "'/api/pages'"},{method:${page ? "'PUT'" : "'POST'"},headers:{'Content-Type':'application/json'},body:JSON.stringify({slug,html})});
+        if(response.ok){published.location.href='/'+encodeURIComponent(slug)}else{if(published)published.close();alert(await response.text())}
+      };
+    </script>
+  `;
+  return htmlPage(page ? 'Seite bearbeiten' : 'Neue Seite', body);
 }
 
 export default {
@@ -202,6 +299,42 @@ export default {
       if (!meta || meta.owner !== session.sub) return new Response('Seite nicht gefunden oder nicht dein Eigentum.', { status: 404 });
       const html = await env.PAGES_KV.get(`page:${slug}`);
       return new Response(editorPage({ slug, html: html || '' }), { headers: privateHeaders() });
+    }
+
+    if (path === 'api/assets' && request.method === 'POST') {
+      const session = await getSession(request, env);
+      if (!session) return new Response('Bitte melde dich mit Google an.', { status: 401 });
+      let form;
+      try { form = await request.formData(); } catch { return new Response('Ungültige Datei.', { status: 400 }); }
+      const file = form.get('file');
+      if (!(file instanceof File)) return new Response('Keine Datei ausgewählt.', { status: 400 });
+      if (!file.type?.startsWith('image/')) return new Response('Nur Bilddateien sind erlaubt.', { status: 400 });
+      if (file.size > 2 * 1024 * 1024) return new Response('Das Bild darf maximal 2 MB groß sein.', { status: 413 });
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = '';
+      for (let index = 0; index < bytes.length; index += 8192) {
+        binary += String.fromCharCode(...bytes.subarray(index, index + 8192));
+      }
+      const id = crypto.randomUUID();
+      await env.PAGES_KV.put(`asset:${id}`, JSON.stringify({ owner: session.sub, type: file.type, data: btoa(binary) }));
+      return new Response(JSON.stringify({ url: `${url.origin}/assets/${id}` }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    if (path.startsWith('assets/') && request.method === 'GET') {
+      const id = cleanSlug(path.slice('assets/'.length));
+      if (!id) return new Response('Bild nicht gefunden.', { status: 404 });
+      const asset = await env.PAGES_KV.get(`asset:${id}`, 'json');
+      if (!asset?.data) return new Response('Bild nicht gefunden.', { status: 404 });
+      const binary = atob(asset.data);
+      const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+      return new Response(bytes, {
+        headers: {
+          'Content-Type': asset.type || 'application/octet-stream',
+          'Cache-Control': 'public, max-age=31536000, immutable'
+        }
+      });
     }
 
     if (path === 'api/pages' || path.startsWith('api/pages/')) {
