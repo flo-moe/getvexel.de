@@ -63,6 +63,12 @@ function secureCookie(name, value, options = '') {
   return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; Secure; SameSite=Lax${options ? `; ${options}` : ''}`;
 }
 
+function redirectResponse(location, status = 303, cookies = []) {
+  const headers = new Headers({ Location: location });
+  for (const cookie of cookies) headers.append('Set-Cookie', cookie);
+  return new Response(null, { status, headers });
+}
+
 function htmlPage(title, body) {
   return `<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} – GetVexel</title><style>
     :root{color-scheme:dark}*{box-sizing:border-box}body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#0b1220;color:#edf2f7}.shell{max-width:980px;margin:auto;padding:32px 20px}.top{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:28px}.brand{font-size:22px;font-weight:800}.card{background:#111c30;border:1px solid #263652;border-radius:14px;padding:22px;margin:16px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}input,textarea{width:100%;padding:12px;border-radius:8px;border:1px solid #334a70;background:#0b1425;color:white;font:inherit}textarea{min-height:360px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.actions{display:flex;gap:10px;flex-wrap:wrap}button,.button{display:inline-block;border:0;border-radius:8px;padding:11px 16px;background:#3b82f6;color:white;font-weight:700;text-decoration:none;cursor:pointer}.button.secondary{background:#263652}.danger{background:#b42318}p{color:#b8c5d9}.page-row{display:flex;justify-content:space-between;align-items:center;gap:12px}.muted{color:#94a3b8;font-size:14px}@media(max-width:700px){.grid{grid-template-columns:1fr}.top,.page-row{align-items:flex-start;flex-direction:column}}
@@ -104,11 +110,9 @@ export default {
         authorize.searchParams.set('scope', 'openid email profile');
         authorize.searchParams.set('state', state);
         authorize.searchParams.set('prompt', 'select_account');
-        const response = Response.redirect(authorize.toString(), 302);
-        response.headers.append('Set-Cookie', secureCookie(STATE_COOKIE, state, 'Max-Age=600'));
-        return response;
+        return redirectResponse(authorize.toString(), 302, [secureCookie(STATE_COOKIE, state, 'Max-Age=600')]);
       } catch (error) {
-        return new Response(`OAuth-Start fehlgeschlagen: ${error.name || 'Unbekannter Fehler'}`, { status: 500 });
+        return new Response(`OAuth-Start fehlgeschlagen: ${error.name || 'Unbekannter Fehler'} – ${error.message || 'Keine Detailmeldung'}`, { status: 500 });
       }
     }
 
@@ -137,31 +141,29 @@ export default {
       const session = await signValue(env.SESSION_SECRET, {
         sub: profile.sub, email: profile.email, name: profile.name || '', exp: Date.now() + 7 * 24 * 60 * 60 * 1000
       });
-      const response = Response.redirect(`${url.origin}/dashboard`, 303);
-      response.headers.append('Set-Cookie', secureCookie(SESSION_COOKIE, session, 'Max-Age=604800'));
-      response.headers.append('Set-Cookie', secureCookie(STATE_COOKIE, '', 'Max-Age=0'));
-      return response;
+      return redirectResponse(`${url.origin}/dashboard`, 303, [
+        secureCookie(SESSION_COOKIE, session, 'Max-Age=604800'),
+        secureCookie(STATE_COOKIE, '', 'Max-Age=0')
+      ]);
       } catch (error) {
         return new Response(`OAuth-Rückkehr fehlgeschlagen: ${error.name || 'Unbekannter Fehler'}`, { status: 500 });
       }
     }
 
     if (request.method === 'GET' && path === 'auth/logout') {
-      const response = Response.redirect(`${url.origin}/`, 303);
-      response.headers.append('Set-Cookie', secureCookie(SESSION_COOKIE, '', 'Max-Age=0'));
-      return response;
+      return redirectResponse(`${url.origin}/`, 303, [secureCookie(SESSION_COOKIE, '', 'Max-Age=0')]);
     }
 
     if (path === '' && request.method === 'GET') {
       const session = await getSession(request, env);
-      if (session) return Response.redirect(`${url.origin}/dashboard`, 303);
+      if (session) return redirectResponse(`${url.origin}/dashboard`);
       return new Response(htmlPage('Anmelden', `<section class="card" style="max-width:560px;margin:90px auto;text-align:center"><div class="brand">GetVexel</div><h1>Erstelle deine eigene Webseite</h1><p>Melde dich mit Google an, um Seiten zu veröffentlichen, zu bearbeiten und zu löschen.</p><br><a class="button" href="/auth/google">Mit Google anmelden</a></section>`), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
     }
 
     if (path === 'dashboard' || path === 'dashboard/new' || path.startsWith('dashboard/edit/')) {
       if (request.method !== 'GET') return new Response('Method nicht erlaubt', { status: 405 });
       const session = await getSession(request, env);
-      if (!session) return Response.redirect(`${url.origin}/auth/google`, 303);
+      if (!session) return redirectResponse(`${url.origin}/auth/google`);
 
       if (path === 'dashboard') {
         const listing = await env.PAGES_KV.list({ prefix: `user-pages:${session.sub}:`, limit: 1000 });
