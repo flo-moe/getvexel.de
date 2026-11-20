@@ -2,8 +2,9 @@ const SESSION_COOKIE = '__Host-getvexel-session';
 const STATE_COOKIE = '__Host-getvexel-oauth-state';
 
 function base64UrlEncode(bytes) {
+  const view = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : Uint8Array.from(bytes);
   let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
+  for (let index = 0; index < view.length; index++) binary += String.fromCharCode(view[index]);
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
