@@ -90,24 +90,30 @@ export default {
     if (!env.PAGES_KV) return new Response('PAGES_KV ist nicht konfiguriert.', { status: 500 });
 
     if (request.method === 'GET' && path === 'auth/google') {
-      if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.SESSION_SECRET) {
-        return new Response('OAuth oder SESSION_SECRET ist nicht konfiguriert.', { status: 500 });
+      try {
+        if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.SESSION_SECRET) {
+          return new Response('OAuth oder SESSION_SECRET ist nicht konfiguriert.', { status: 500 });
+        }
+        const random = crypto.getRandomValues(new Uint8Array(32));
+        const state = base64UrlEncode(random);
+        const callback = `${url.origin}/auth/callback`;
+        const authorize = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+        authorize.searchParams.set('client_id', env.GOOGLE_CLIENT_ID);
+        authorize.searchParams.set('redirect_uri', callback);
+        authorize.searchParams.set('response_type', 'code');
+        authorize.searchParams.set('scope', 'openid email profile');
+        authorize.searchParams.set('state', state);
+        authorize.searchParams.set('prompt', 'select_account');
+        const response = Response.redirect(authorize.toString(), 302);
+        response.headers.append('Set-Cookie', secureCookie(STATE_COOKIE, state, 'Max-Age=600'));
+        return response;
+      } catch (error) {
+        return new Response(`OAuth-Start fehlgeschlagen: ${error.name || 'Unbekannter Fehler'}`, { status: 500 });
       }
-      const state = crypto.randomUUID();
-      const callback = `${url.origin}/auth/callback`;
-      const authorize = new URL('https://accounts.google.com/o/oauth2/v2/auth');
-      authorize.searchParams.set('client_id', env.GOOGLE_CLIENT_ID);
-      authorize.searchParams.set('redirect_uri', callback);
-      authorize.searchParams.set('response_type', 'code');
-      authorize.searchParams.set('scope', 'openid email profile');
-      authorize.searchParams.set('state', state);
-      authorize.searchParams.set('prompt', 'select_account');
-      const response = Response.redirect(authorize.toString(), 302);
-      response.headers.append('Set-Cookie', secureCookie(STATE_COOKIE, state, 'Max-Age=600'));
-      return response;
     }
 
     if (request.method === 'GET' && path === 'auth/callback') {
+      try {
       const code = url.searchParams.get('code');
       const state = url.searchParams.get('state');
       if (!code || !state || state !== getCookie(request, STATE_COOKIE)) {
@@ -135,6 +141,9 @@ export default {
       response.headers.append('Set-Cookie', secureCookie(SESSION_COOKIE, session, 'Max-Age=604800'));
       response.headers.append('Set-Cookie', secureCookie(STATE_COOKIE, '', 'Max-Age=0'));
       return response;
+      } catch (error) {
+        return new Response(`OAuth-Rückkehr fehlgeschlagen: ${error.name || 'Unbekannter Fehler'}`, { status: 500 });
+      }
     }
 
     if (request.method === 'GET' && path === 'auth/logout') {
