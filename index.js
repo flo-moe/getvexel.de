@@ -124,7 +124,7 @@ export default {
       if (!tokenResponse.ok) return new Response('Google-Anmeldung fehlgeschlagen.', { status: 401 });
       const tokens = await tokenResponse.json();
       const profileResponse = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
-        headers: { Authorization: `Bearer ${tokens.access_token}` }
+        headers: { Authorization: 'Bearer ' + tokens.access_token }
       });
       if (!profileResponse.ok) return new Response('Google-Profil konnte nicht geladen werden.', { status: 401 });
       const profile = await profileResponse.json();
