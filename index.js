@@ -94,7 +94,6 @@ export default {
         return new Response('OAuth oder SESSION_SECRET ist nicht konfiguriert.', { status: 500 });
       }
       const state = crypto.randomUUID();
-      await signValue(env.SESSION_SECRET, { state });
       const callback = `${url.origin}/auth/callback`;
       const authorize = new URL('https://accounts.google.com/o/oauth2/v2/auth');
       authorize.searchParams.set('client_id', env.GOOGLE_CLIENT_ID);
