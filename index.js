@@ -146,7 +146,7 @@ export default {
         secureCookie(STATE_COOKIE, '', 'Max-Age=0')
       ]);
       } catch (error) {
-        return new Response(`OAuth-Rückkehr fehlgeschlagen: ${error.name || 'Unbekannter Fehler'}`, { status: 500 });
+        return new Response(`OAuth-Rückkehr fehlgeschlagen: ${error.name || 'Unbekannter Fehler'} – ${error.message || 'Keine Detailmeldung'}`, { status: 500 });
       }
     }
 
