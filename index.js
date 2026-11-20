@@ -139,9 +139,16 @@ export default {
       if (!profileResponse.ok) return new Response('Google-Profil konnte nicht geladen werden.', { status: 401 });
       const profile = await profileResponse.json();
       if (!profile.sub || !profile.email) return new Response('Google-Konto ist unvollständig.', { status: 401 });
-      const session = await signValue(env.SESSION_SECRET, {
+      const sessionData = {
         sub: profile.sub, email: profile.email, name: profile.name || '', exp: Date.now() + 7 * 24 * 60 * 60 * 1000
-      });
+      };
+      await env.PAGES_KV.put(`account:${profile.sub}`, JSON.stringify({
+        sub: profile.sub,
+        email: profile.email,
+        name: profile.name || '',
+        lastLoginAt: Date.now()
+      }));
+      const session = await signValue(env.SESSION_SECRET, sessionData);
       return redirectResponse(`${url.origin}/dashboard`, 303, [
         secureCookie(SESSION_COOKIE, session, 'Max-Age=604800'),
         secureCookie(STATE_COOKIE, '', 'Max-Age=0')
