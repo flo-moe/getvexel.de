@@ -99,7 +99,12 @@ function htmlPage(title, body) {
 
 function dashboardPage(user, pages, origin) {
   const rows = pages.map(page => `<article class="card page-row"><div><strong>${escapeHtml(page.slug)}</strong><div class="muted">${escapeHtml(origin)}/${escapeHtml(page.slug)}</div></div><div class="actions"><a class="button secondary" href="/${encodeURIComponent(page.slug)}" target="_blank">Ansehen</a><a class="button" href="/dashboard/edit/${encodeURIComponent(page.slug)}">Bearbeiten</a><button class="danger" type="button" onclick="deletePage('${escapeHtml(page.slug)}')">Löschen</button></div></article>`).join('');
-  return htmlPage('Dashboard', `<div class="top"><div><div class="brand">GetVexel</div><div class="muted">Angemeldet als ${escapeHtml(user.email)}</div></div><div class="actions"><a class="button" href="/dashboard/new">Neue Seite</a><a class="button secondary" href="/auth/logout">Abmelden</a></div></div><h1>Meine Seiten</h1>${rows || '<div class="card"><p>Du hast noch keine Seiten erstellt.</p></div>'}<script>async function deletePage(slug){if(!confirm('Diese Seite wirklich löschen?'))return;const response=await fetch('/api/pages/'+encodeURIComponent(slug),{method:'DELETE'});if(response.ok){location.reload()}else{alert(await response.text())}}</script>`);
+  return htmlPage('Dashboard', `<div class="top"><div><div class="brand">GetVexel</div><div class="muted">Angemeldet als ${escapeHtml(user.email)}</div></div><div class="actions"><a class="button" href="/dashboard/new">Neue Seite</a><a class="button" href="/databases">Meine Datenbanken</a><a class="button secondary" href="/auth/logout">Abmelden</a></div></div><h1>Meine Seiten</h1>${rows || '<div class="card"><p>Du hast noch keine Seiten erstellt.</p></div>'}<script>async function deletePage(slug){if(!confirm('Diese Seite wirklich löschen?'))return;const response=await fetch('/api/pages/'+encodeURIComponent(slug),{method:'DELETE'});if(response.ok){location.reload()}else{alert(await response.text())}}</script>`);
+}
+
+function databasePage(databases) {
+  const cards = databases.map(db => `<article class="card page-row"><div><strong>${escapeHtml(db.name)}</strong><div class="muted">ID: ${escapeHtml(db.id)}</div></div><button class="danger" onclick="deleteDatabase('${escapeHtml(db.id)}')">Löschen</button></article>`).join('');
+  return htmlPage('Datenbanken', `<div class="top"><div><div class="brand">GetVexel Datenbanken</div><div class="muted">Bis zu zwei Datenbanken pro Konto</div></div><a class="button secondary" href="/dashboard">Zum Dashboard</a></div><form id="create-db"><label>Name der Datenbank</label><input id="db-name" required maxlength="40" placeholder="Meine Datenbank"><br><br><button type="submit">Datenbank erstellen</button></form><h1>Meine Datenbanken</h1><div id="database-list">${cards || '<div class="card"><p>Noch keine Datenbank vorhanden.</p></div>'}</div><script>document.querySelector('#create-db').addEventListener('submit',async event=>{event.preventDefault();const name=document.querySelector('#db-name').value;const response=await fetch('/api/databases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});if(response.ok)location.reload();else alert(await response.text())});async function deleteDatabase(id){if(!confirm('Datenbank wirklich löschen?'))return;const response=await fetch('/api/databases/'+encodeURIComponent(id),{method:'DELETE'});if(response.ok)location.reload();else alert(await response.text())}</script>`);
 }
 
 function editorPage(page = null) {
@@ -257,6 +262,60 @@ export default {
       const html = await env.PAGES_KV.get(`page:${slug}`);
       const project = await env.PAGES_KV.get(`project:${slug}`, 'json');
       return new Response(editorPage({ slug, html: html || '', project }), { headers: privateHeaders() });
+    }
+
+    if (path === 'databases' && request.method === 'GET') {
+      const session = await getSession(request, env);
+      if (!session) return redirectResponse(`${url.origin}/auth/google`);
+      if (!env.DB) return new Response('D1-Datenbank ist nicht konfiguriert.', { status: 500 });
+      const result = await env.DB.prepare('SELECT id, name FROM user_databases WHERE owner_sub = ? ORDER BY name').bind(session.sub).all();
+      return new Response(databasePage(result.results || []), { headers: privateHeaders() });
+    }
+
+    if (path === 'api/databases' || path.startsWith('api/databases/')) {
+      const session = await getSession(request, env);
+      if (!session) return new Response('Bitte melde dich mit Google an.', { status: 401 });
+      if (!env.DB) return new Response('D1-Datenbank ist nicht konfiguriert.', { status: 500 });
+
+      const id = path.startsWith('api/databases/') ? cleanSlug(decodeURIComponent(path.slice('api/databases/'.length))) : '';
+
+      if (request.method === 'POST' && path === 'api/databases') {
+        let body; try { body = await request.json(); } catch { return new Response('Ungültige Daten.', { status: 400 }); }
+        const name = String(body.name || '').trim().slice(0, 40);
+        if (!name) return new Response('Bitte einen Datenbanknamen eingeben.', { status: 400 });
+        const count = await env.DB.prepare('SELECT COUNT(*) AS count FROM user_databases WHERE owner_sub = ?').bind(session.sub).first();
+        if ((count?.count || 0) >= 2) return new Response('Du kannst maximal zwei Datenbanken erstellen.', { status: 409 });
+        const databaseId = crypto.randomUUID();
+        await env.DB.prepare('INSERT INTO user_databases (id, owner_sub, name) VALUES (?, ?, ?)').bind(databaseId, session.sub, name).run();
+        return new Response(JSON.stringify({ id: databaseId, name }), { headers: { 'Content-Type': 'application/json' } });
+      }
+
+      if (request.method === 'POST' && id) {
+        const database = await env.DB.prepare('SELECT id FROM user_databases WHERE id = ? AND owner_sub = ?').bind(id, session.sub).first();
+        if (!database) return new Response('Datenbank nicht gefunden.', { status: 404 });
+        let body; try { body = await request.json(); } catch { return new Response('Ungültige Daten.', { status: 400 }); }
+        const name = String(body.name || 'Eintrag').trim().slice(0, 80);
+        const itemId = crypto.randomUUID();
+        await env.DB.prepare('INSERT INTO database_items (id, database_id, owner_sub, name, json_data, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+          .bind(itemId, id, session.sub, name, JSON.stringify(body.data || {}), Date.now()).run();
+        return new Response(JSON.stringify({ id: itemId, name }), { headers: { 'Content-Type': 'application/json' } });
+      }
+
+      if (request.method === 'GET' && id) {
+        const database = await env.DB.prepare('SELECT id, name FROM user_databases WHERE id = ? AND owner_sub = ?').bind(id, session.sub).first();
+        if (!database) return new Response('Datenbank nicht gefunden.', { status: 404 });
+        const items = await env.DB.prepare('SELECT id, name, json_data, created_at FROM database_items WHERE database_id = ? AND owner_sub = ? ORDER BY created_at DESC').bind(id, session.sub).all();
+        return new Response(JSON.stringify({ database, items: items.results || [] }), { headers: { 'Content-Type': 'application/json' } });
+      }
+
+      if (request.method === 'DELETE' && id) {
+        const deleted = await env.DB.prepare('DELETE FROM user_databases WHERE id = ? AND owner_sub = ?').bind(id, session.sub).run();
+        if (!deleted.meta.changes) return new Response('Datenbank nicht gefunden.', { status: 404 });
+        await env.DB.prepare('DELETE FROM database_items WHERE database_id = ? AND owner_sub = ?').bind(id, session.sub).run();
+        return new Response('OK');
+      }
+
+      return new Response('Method nicht erlaubt', { status: 405 });
     }
 
     if (path === 'api/assets' && request.method === 'POST') {

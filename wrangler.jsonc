@@ -7,5 +7,12 @@
       "binding": "PAGES_KV",
       "id": "c202b13affaa405798e7b386de5fda85"
     }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "getvexel-databases",
+      "database_id": "7a633612-e81b-4846-a005-f7af6354775b"
+    }
   ]
 }
