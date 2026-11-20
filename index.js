@@ -70,6 +70,14 @@ function redirectResponse(location, status = 303, cookies = []) {
   return new Response(null, { status, headers });
 }
 
+function privateHeaders() {
+  return {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+    'Pragma': 'no-cache'
+  };
+}
+
 function htmlPage(title, body) {
   return `<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} – GetVexel</title><style>
     :root{color-scheme:dark}*{box-sizing:border-box}body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#0b1220;color:#edf2f7}.shell{max-width:980px;margin:auto;padding:32px 20px}.top{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:28px}.brand{font-size:22px;font-weight:800}.card{background:#111c30;border:1px solid #263652;border-radius:14px;padding:22px;margin:16px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}input,textarea{width:100%;padding:12px;border-radius:8px;border:1px solid #334a70;background:#0b1425;color:white;font:inherit}textarea{min-height:360px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.actions{display:flex;gap:10px;flex-wrap:wrap}button,.button{display:inline-block;border:0;border-radius:8px;padding:11px 16px;background:#3b82f6;color:white;font-weight:700;text-decoration:none;cursor:pointer}.button.secondary{background:#263652}.danger{background:#b42318}p{color:#b8c5d9}.page-row{display:flex;justify-content:space-between;align-items:center;gap:12px}.muted{color:#94a3b8;font-size:14px}@media(max-width:700px){.grid{grid-template-columns:1fr}.top,.page-row{align-items:flex-start;flex-direction:column}}
@@ -182,18 +190,18 @@ export default {
           if (html !== null) pages.push({ slug, html });
         }
         pages.sort((a, b) => a.slug.localeCompare(b.slug));
-        return new Response(dashboardPage(session, pages, url.origin), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+        return new Response(dashboardPage(session, pages, url.origin), { headers: privateHeaders() });
       }
 
       if (path === 'dashboard/new') {
-        return new Response(editorPage(), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+        return new Response(editorPage(), { headers: privateHeaders() });
       }
 
       const slug = cleanSlug(decodeURIComponent(path.slice('dashboard/edit/'.length)));
       const meta = await env.PAGES_KV.get(`page-meta:${slug}`, 'json');
       if (!meta || meta.owner !== session.sub) return new Response('Seite nicht gefunden oder nicht dein Eigentum.', { status: 404 });
       const html = await env.PAGES_KV.get(`page:${slug}`);
-      return new Response(editorPage({ slug, html: html || '' }), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+      return new Response(editorPage({ slug, html: html || '' }), { headers: privateHeaders() });
     }
 
     if (path === 'api/pages' || path.startsWith('api/pages/')) {
