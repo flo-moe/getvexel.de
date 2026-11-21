@@ -166,7 +166,7 @@ function editorPage(page = null) {
   const slug = page?.slug || '';
   const content = page?.html || '<h1>Meine neue Seite</h1>\n<p>Hallo Welt!</p>';
   const project = page?.project || { html: content, css: '', js: '' };
-  const projectJson = JSON.stringify(project).replace(/<\/script/gi, '<\\/script');
+  const projectJson = JSON.stringify(project).replace(/</g, '\\u003C').replace(/>/g, '\\u003E').replace(/&/g, '\\u0026');
 
   return shell('Web-Editor', `
     <style>
