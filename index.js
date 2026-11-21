@@ -140,7 +140,7 @@ function editorPage(page = null) {
     <div class="ide">
       <div class="titlebar"><div class="brand"><input id="slug" aria-label="Seitenname" value="${escapeHtml(slug)}" placeholder="seitenname" style="width:180px;margin-right:8px;padding:6px" ${page ? 'readonly' : ''}>GetVexel <span style="color:#888">— Web-Editor</span></div><div class="actions"><button class="small secondary" id="save" type="button">Speichern</button><button class="small" id="publish" type="button">Veröffentlichen</button></div></div>
       <div class="workspace">
-        <aside class="explorer"><strong>EXPLORER</strong><button class="file active" data-file="html">index.html</button><button class="file" data-file="css">styles.css</button><button class="file" data-file="js">script.js</button></aside>
+        <aside class="explorer"><strong>EXPLORER</strong><button class="file active" type="button" data-file="html" onclick="switchFile('html')">index.html</button><button class="file" type="button" data-file="css" onclick="switchFile('css')">styles.css</button><button class="file" type="button" data-file="js" onclick="switchFile('js')">script.js</button></aside>
         <section class="editor-pane"><div class="editor-tabs"><button class="tab active" id="active-tab">index.html</button></div><textarea id="code" class="code" spellcheck="false"></textarea></section>
         <section class="preview"><div class="preview-bar"><strong>Vorschau</strong><button class="small secondary" id="refresh" type="button">Aktualisieren</button></div><iframe id="preview" class="preview-frame" title="Live-Vorschau" sandbox="allow-scripts allow-modals"></iframe></section>
       </div>
@@ -156,6 +156,7 @@ function editorPage(page = null) {
       function saveCode(){if(files[active]!==undefined)files[active]=code.value}
       function showFile(fileName){
         saveCode();
+        if(!names[fileName]) return;
         active=fileName;
         code.value=String(files[active]||'');
         document.querySelector('#active-tab').textContent=names[active];
@@ -163,8 +164,9 @@ function editorPage(page = null) {
         updatePreview();
         code.focus();
       }
+      window.switchFile=showFile;
       function updatePreview(){saveCode();const html=files.html.includes('<html')?files.html:'<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>'+files.css+'</style></head><body>'+files.html+'<script>'+files.js+'<\\/script></body></html>';preview.srcdoc=html}
-      document.querySelectorAll('.file').forEach(button=>button.addEventListener('click',()=>showFile(button.dataset.file));
+      document.querySelectorAll('.file').forEach(button=>button.addEventListener('click',()=>showFile(button.dataset.file)));
       code.addEventListener('input',()=>{saveCode();updatePreview();const before=code.value.slice(0,code.selectionStart).split('\\n');document.querySelector('#position').textContent='Zeile '+before.length+', Spalte '+(before.at(-1).length+1)});
       code.addEventListener('keydown',event=>{if(event.key==='Tab'){event.preventEvent?.();event.preventDefault();const start=code.selectionStart,end=code.selectionEnd;code.setRangeText('  ',start,end,'end');saveCode();updatePreview()}});
       document.querySelector('#refresh').onclick=updatePreview;
