@@ -99,10 +99,18 @@ async function currentUser(request, env) {
 }
 
 function getPagesOrigin(env, url) {
-  if (env.PAGES_ORIGIN) return env.PAGES_ORIGIN.replace(/\/+$/, '');
-  const host = url.hostname;
-  if (host === 'getvexel.flomoe.workers.dev') return 'https://getvexel-pages.flomoe.workers.dev';
-  return url.origin;
+  let origin = env.PAGES_ORIGIN;
+  if (!origin && url.hostname === 'getvexel.flomoe.workers.dev') {
+    origin = 'https://getvexel-pages.flomoe.workers.dev';
+  }
+  if (!origin) throw new Error('PAGES_ORIGIN ist nicht konfiguriert.');
+
+  let pagesUrl;
+  try { pagesUrl = new URL(origin); } catch { throw new Error('PAGES_ORIGIN ist keine gültige URL.'); }
+  if (pagesUrl.protocol !== 'https:' || pagesUrl.origin === url.origin) {
+    throw new Error('PAGES_ORIGIN muss HTTPS verwenden und vom Dashboard getrennt sein.');
+  }
+  return pagesUrl.origin;
 }
 
 function privateHeaders(extra = {}) {
@@ -390,6 +398,8 @@ export default {
     if (path === 'api/assets' && request.method === 'POST') {
       const user = await currentUser(request, env);
       if (!user) return new Response('Anmeldung erforderlich.', { status: 401 });
+      const contentLength = Number(request.headers.get('Content-Length') || 0);
+      if (contentLength > 2200000) return new Response('Upload zu groß.', { status: 413 });
       const form = await request.formData();
       const file = form.get('file');
       if (!(file instanceof File)) return new Response('Keine gültige Bilddatei.', { status: 400 });
@@ -416,16 +426,38 @@ export default {
       const slug = cleanSlug(path.startsWith('api/pages/') ? decodeURIComponent(path.slice('api/pages/'.length)) : '');
 
       if (request.method === 'POST' && path === 'api/pages') {
+        const requestLength = Number(request.headers.get('Content-Length') || 0);
+        if (requestLength > 1200000) return new Response('Projekt ist zu groß.', { status: 413 });
         let body; try { body = await request.json(); } catch { return new Response('Ungültige Daten.', { status: 400 }); }
         const name = cleanSlug(body.slug || '');
         if (!name) return new Response('Seitennamen eingeben.', { status: 400 });
-        if (!body.project || !body.project.html) body.project = { html: String(body.html || ''), css: '', js: '' };
-        if (await env.PAGES_KV.get(`meta:${name}`)) return new Response('Seitenname bereits vergeben.', { status: 409 });
+        if (!body.project || typeof body.project.html !== 'string') body.project = { html: String(body.html || ''), css: '', js: '' };
+        body.project.css = String(body.project.css || '');
+        body.project.js = String(body.project.js || '');
+        body.project.html = String(body.project.html || '');
+        const totalSize = body.project.html.length + body.project.css.length + body.project.js.length;
+        if (totalSize > 1000000) return new Response('Projekt ist zu groß.', { status: 413 });
+
+        let reservation;
+        try {
+          reservation = await env.DB.prepare('INSERT INTO reserved_slugs(slug, owner_sub) VALUES(?, ?)').bind(name, user.sub).run();
+        } catch (error) {
+          if (String(error.message || error).includes('UNIQUE') || String(error.message || error).includes('PRIMARY')) {
+            return new Response('Seitenname bereits vergeben.', { status: 409 });
+          }
+          throw error;
+        }
+
         const html = combineProject(body.project);
-        await env.PAGES_KV.put(`page:${name}`, html);
-        await env.PAGES_KV.put(`project:${name}`, JSON.stringify(body.project));
-        await env.PAGES_KV.put(`meta:${name}`, JSON.stringify({ owner: user.sub, updatedAt: Date.now() }));
-        await env.PAGES_KV.put(`owner:${user.sub}:${name}`, '1');
+        try {
+          await env.PAGES_KV.put(`page:${name}`, html);
+          await env.PAGES_KV.put(`project:${name}`, JSON.stringify(body.project));
+          await env.PAGES_KV.put(`meta:${name}`, JSON.stringify({ owner: user.sub, updatedAt: Date.now() }));
+          await env.PAGES_KV.put(`owner:${user.sub}:${name}`, '1');
+        } catch (error) {
+          await env.DB.prepare('DELETE FROM reserved_slugs WHERE slug=? AND owner_sub=?').bind(name, user.sub).run();
+          throw error;
+        }
         return new Response('OK');
       }
 
@@ -433,8 +465,15 @@ export default {
         const meta = await env.PAGES_KV.get(`meta:${slug}`, 'json');
         if (!meta) return new Response('Seite nicht gefunden.', { status: 404 });
         if (meta.owner !== user.sub) return new Response('Nicht erlaubt.', { status: 403 });
+        const requestLength = Number(request.headers.get('Content-Length') || 0);
+        if (requestLength > 1200000) return new Response('Projekt ist zu groß.', { status: 413 });
         let body; try { body = await request.json(); } catch { return new Response('Ungültige Daten.', { status: 400 }); }
         if (!body.project) body.project = { html: String(body.html || ''), css: '', js: '' };
+        body.project.css = String(body.project.css || '');
+        body.project.js = String(body.project.js || '');
+        body.project.html = String(body.project.html || '');
+        const totalSize = body.project.html.length + body.project.css.length + body.project.js.length;
+        if (totalSize > 1000000) return new Response('Projekt ist zu groß.', { status: 413 });
         await env.PAGES_KV.put(`page:${slug}`, combineProject(body.project));
         await env.PAGES_KV.put(`project:${slug}`, JSON.stringify(body.project));
         await env.PAGES_KV.put(`meta:${slug}`, JSON.stringify({ owner: user.sub, updatedAt: Date.now() }));
@@ -449,6 +488,7 @@ export default {
         await env.PAGES_KV.delete(`project:${slug}`);
         await env.PAGES_KV.delete(`meta:${slug}`);
         await env.PAGES_KV.delete(`owner:${user.sub}:${slug}`);
+        await env.DB.prepare('DELETE FROM reserved_slugs WHERE slug=? AND owner_sub=?').bind(slug, user.sub).run();
         return new Response('OK');
       }
 
