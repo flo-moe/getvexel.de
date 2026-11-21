@@ -167,16 +167,20 @@ function editorPage(page = null) {
   const content = page?.html || '<h1>Meine neue Seite</h1>\n<p>Hallo Welt!</p>';
   const project = page?.project || { html: content, css: '', js: '' };
   const projectJson = JSON.stringify(project).replace(/<\/script/gi, '<\\/script');
+
   return shell('Web-Editor', `
     <style>
-      body{overflow:hidden}.wrap{max-width:none;height:100vh;padding:0}.ide{height:100vh;background:#1e1e1e;display:grid;grid-template-rows:44px 1fr 24px}.bar{height:44px;background:#181818;border-bottom:1px solid #333;padding:0 12px;display:flex;align-items:center;justify-content:space-between}.workspace{display:grid;grid-template-columns:180px 1fr 48%;min-height:0}.explorer{background:#252526;border-right:1px solid #333;padding:10px}.file{display:block;width:100%;border:0;background:transparent;color:#ccc;text-align:left;padding:8px;cursor:pointer}.file.active{background:#37373d;color:white}.editor{display:flex;flex-direction:column}.tabname{height:36px;background:#252526;border-bottom:1px solid #333;color:white;padding:9px 14px}.code{flex:1;width:100%;resize:none;border:0;outline:none;padding:16px;background:#1e1e1e;color:#d4d4d4;font:14px/1.5 ui-monospace,monospace;box-sizing:border-box}.preview{display:flex;flex-direction:column;background:#111;border-left:1px solid #333}.previewbar{height:36px;background:#252526;padding:0 10px;display:flex;align-items:center;justify-content:space-between}.previewframe{flex:1;border:0;background:white}.status{background:#007acc;color:white;font-size:12px;padding:3px 10px}.small{border:0;border-radius:4px;padding:7px 10px;background:#0e639c;color:white;cursor:pointer}.small.secondary{background:#3c3c3c}@media(max-width:900px){.workspace{grid-template-columns:150px 1fr}.preview{display:none}}
+      body{overflow:hidden}.wrap{max-width:none;height:100vh;padding:0}.ide{height:100vh;display:grid;grid-template-rows:44px 1fr 24px;background:#1e1e1e;color:#ddd}.bar{display:flex;align-items:center;justify-content:space-between;height:44px;padding:0 12px;background:#181818;border-bottom:1px solid #333}.workspace{display:grid;grid-template-columns:180px minmax(220px,1fr) 48%;min-height:0}.explorer{padding:10px;background:#252526;border-right:1px solid #333}.explorer strong{display:block;margin-bottom:8px}.file{display:block;width:100%;border:0;background:transparent;color:#ccc;text-align:left;padding:9px;cursor:pointer}.file.active{background:#37373d;color:white}.editor{display:flex;flex-direction:column;min-width:0}.tabname{height:36px;padding:9px 14px;background:#252526;border-bottom:1px solid #333;color:white}.code{flex:1;width:100%;resize:none;border:0;outline:none;padding:16px;background:#1e1e1e;color:#d4d4d4;font:14px/1.5 ui-monospace,monospace;box-sizing:border-box}.preview{display:flex;flex-direction:column;border-left:1px solid #333;background:#111}.previewbar{height:36px;padding:0 10px;display:flex;align-items:center;justify-content:space-between;background:#252526}.previewframe{flex:1;width:100%;border:0;background:white}.status{height:24px;padding:3px 10px;background:#007acc;color:white;font-size:12px}.small{border:0;border-radius:4px;padding:7px 10px;background:#0e639c;color:white;cursor:pointer}.small.secondary{background:#3c3c3c}@media(max-width:900px){.workspace{grid-template-columns:150px 1fr}.preview{display:none}}
     </style>
     <div class="ide">
-      <div class="bar"><div><input id="slug" value="${escapeHtml(slug)}" placeholder="seitenname" style="width:180px;margin-right:8px;padding:6px" ${page ? 'readonly' : ''}><strong>GetVexel Web-Editor</strong></div><div><button class="small secondary" id="save" type="button">Speichern</button> <button class="small" id="publish" type="button">Veröffentlichen</button></div></div>
+      <div class="bar">
+        <div><input id="slug" value="${escapeHtml(slug)}" placeholder="seitenname" style="width:180px;margin-right:8px;padding:6px" ${page ? 'readonly' : ''}><strong>GetVexel Web-Editor</strong></div>
+        <div><button class="small secondary" id="save" type="button">Speichern</button> <button class="small" id="publish" type="button">Veröffentlichen</button></div>
+      </div>
       <div class="workspace">
-        <aside class="explorer"><strong>EXPLORER</strong><button class="file active" data-file="html">index.html</button><button class="file" data-file="css">styles.css</button><button class="file" data-file="js">script.js</button></aside>
+        <aside class="explorer"><strong>EXPLORER</strong><button class="file active" type="button" data-file="html">index.html</button><button class="file" type="button" data-file="css">styles.css</button><button class="file" type="button" data-file="js">script.js</button></aside>
         <section class="editor"><div class="tabname" id="tabname">index.html</div><textarea id="code" class="code" spellcheck="false"></textarea></section>
-        <section class="preview"><div class="previewbar"><strong>Vorschau</strong><button class="small secondary" id="refresh">Aktualisieren</button></div><iframe id="preview" class="previewframe" sandbox="allow-scripts allow-modals"></iframe></section>
+        <section class="preview"><div class="previewbar"><strong>Vorschau</strong><button class="small secondary" id="refresh" type="button">Aktualisieren</button></div><iframe id="preview" class="previewframe" title="Live-Vorschau"></iframe></section>
       </div>
       <div class="status"><span id="position">Zeile 1, Spalte 1</span></div>
     </div>
@@ -187,29 +191,65 @@ function editorPage(page = null) {
       const code=document.querySelector('#code');
       const preview=document.querySelector('#preview');
       const names={html:'index.html',css:'styles.css',js:'script.js'};
-      function saveEditor(){files[active]=code.value}
-      function openFile(name){saveEditor();active=name;code.value=files[name]||'';document.querySelector('#tabname').textContent=names[name];document.querySelectorAll('.file').forEach(button=>button.classList.toggle('active',button.dataset.file===name));code.focus();updatePreview()}
-      function updatePreview(){saveEditor();const open='<scr'+'ipt>';const close='<\\/'+'scr'+'ipt>';let html;if(files.html.toLowerCase().includes('<html')){html=files.html;if(files.css)html=html.includes('</head>')?html.replace('</head>','<style>'+files.css+'</style></head>'):html+'<style>'+files.css+'</style>';if(files.js)html=html.includes('</body>')?html.replace('</body>',open+files.js+close+'</body>'):html+open+files.js+close}else{html='<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>'+files.css+'</style></head><body>'+files.html+(files.js?open+files.js+close:'')+'</body></html>'}preview.srcdoc=html}
-      document.querySelectorAll('.file').forEach(button=>button.onclick=()=>openFile(button.dataset.file));
-      code.oninput=()=>{saveEditor();const before=code.value.slice(0,code.selectionStart).split('\n');document.querySelector('#position').textContent='Zeile '+before.length+', Spalte '+(before.at(-1).length+1);updatePreview()};
-      code.onkeydown=event=>{if(event.key==='Tab'){event.preventDefault();const start=code.selectionStart,end=code.selectionEnd;code.setRangeText('  ',start,end,'end');saveEditor();updatePreview()}};
-      document.querySelector('#refresh').onclick=updatePreview;
-      async function saveProject(){saveEditor();const name=document.querySelector('#slug').value.trim();if(!name){alert('Seitennamen eingeben');return null}const isEdit=${page ? 'true' : 'false'};const response=await fetch(isEdit?'/api/pages/'+encodeURIComponent(name):'/api/pages',{method:isEdit?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slug:name,html:files.html,project:files})});if(!response.ok)alert(await response.text());return response}
-      document.querySelector('#save').onclick=async()=>{const response=await saveProject();if(response?.ok)alert('Gespeichert')};
-      document.querySelector('#publish').onclick=async()=>{const response=await saveProject();if(response?.ok)window.open('/'+encodeURIComponent(document.querySelector('#slug').value.trim()),'_blank')};
+
+      function saveCurrent(){files[active]=code.value}
+
+      function updatePreview(){
+        saveCurrent();
+        const scriptOpen='<scr'+'ipt>';
+        const scriptClose='<'+'/scr'+'ipt>';
+        let documentHtml;
+        if(files.html.toLowerCase().includes('<html')){
+          documentHtml=files.html;
+          if(files.css) documentHtml=documentHtml.includes('</head>')?documentHtml.replace('</head>','<style>'+files.css+'</style></head>'):documentHtml+'<style>'+files.css+'</style>';
+          if(files.js) documentHtml=documentHtml.includes('</body>')?documentHtml.replace('</body>',scriptOpen+files.js+scriptClose+'</body>'):documentHtml+scriptOpen+files.js+scriptClose;
+        }else{
+          documentHtml='<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>'+files.css+'</style></head><body>'+files.html+(files.js?scriptOpen+files.js+scriptClose:'')+'</body></html>';
+        }
+        preview.srcdoc=documentHtml;
+      }
+
+      function openFile(name){
+        saveCurrent();
+        active=name;
+        code.value=files[name]||'';
+        document.querySelector('#tabname').textContent=names[name];
+        document.querySelectorAll('.file').forEach(button=>button.classList.toggle('active',button.dataset.file===name));
+        updateCursor();
+        code.focus();
+        updatePreview();
+      }
+
+      function updateCursor(){
+        const before=code.value.slice(0,code.selectionStart).split('\n');
+        document.querySelector('#position').textContent='Zeile '+before.length+', Spalte '+(before.at(-1).length+1);
+      }
+
+      document.querySelectorAll('.file').forEach(button=>button.addEventListener('click',()=>openFile(button.dataset.file)));
+      code.addEventListener('input',()=>{saveCurrent();updateCursor();updatePreview()});
+      code.addEventListener('keyup',updateCursor);
+      code.addEventListener('click',updateCursor);
+      code.addEventListener('keydown',event=>{if(event.key==='Tab'){event.preventDefault();const start=code.selectionStart,end=code.selectionEnd;code.setRangeText('  ',start,end,'end');saveCurrent();updatePreview()}});
+      document.querySelector('#refresh').addEventListener('click',updatePreview);
+
+      async function saveProject(){
+        saveCurrent();
+        const name=document.querySelector('#slug').value.trim();
+        if(!name){alert('Seitennamen eingeben');return null}
+        const isEdit=${page ? 'true' : 'false'};
+        const response=await fetch(isEdit?'/api/pages/'+encodeURIComponent(name):'/api/pages',{method:isEdit?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slug:name,html:files.html,project:files})});
+        if(!response.ok)alert(await response.text());
+        return response;
+      }
+
+      document.querySelector('#save').addEventListener('click',async()=>{const response=await saveProject();if(response?.ok)alert('Gespeichert')});
+      document.querySelector('#publish').addEventListener('click',async()=>{const response=await saveProject();if(response?.ok)window.open('/'+encodeURIComponent(document.querySelector('#slug').value.trim()),'_blank')});
+
       openFile('html');
     </script>
   `);
 }
 
-function validImageBytes(bytes) {
-  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) return 'image/png';
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
-  if (bytes.length >= 6 && String.fromCharCode(...bytes.slice(0, 6)) === 'GIF87a') return 'image/gif';
-  if (bytes.length >= 6 && String.fromCharCode(...bytes.slice(0, 6)) === 'GIF89a') return 'image/gif';
-  if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF' && String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP') return 'image/webp';
-  return null;
-}
 
 async function monthlyCredits(env, ownerSub) {
   if (!env.DB) return 5000;
