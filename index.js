@@ -125,8 +125,18 @@ function dashboardPage(user, pages, origin, credits) {
 }
 
 function databasePage(databases, credits) {
-  const cards = databases.map(db => `<article class="card page-row"><div><strong>${escapeHtml(db.name)}</strong><div class="muted">ID: ${escapeHtml(db.id)}</div></div><button class="danger" onclick="deleteDatabase('${escapeHtml(db.id)}')">Löschen</button></article>`).join('');
+  const cards = databases.map(db => `<article class="card page-row"><div><a class="button" href="/databases/${encodeURIComponent(db.id)}">${escapeHtml(db.name)}</a><div class="muted">ID: ${escapeHtml(db.id)}</div></div><button class="danger" onclick="deleteDatabase('${escapeHtml(db.id)}')">Löschen</button></article>`).join('');
   return htmlPage('Datenbanken', `<div class="top"><div><div class="brand">GetVexel Datenbanken</div><div class="muted">Bis zu drei Datenbanken pro Konto · ${credits} Credits verbleibend</div></div><a class="button secondary" href="/dashboard">Zum Dashboard</a></div><form id="create-db"><label>Name der Datenbank</label><input id="db-name" required maxlength="40" placeholder="Meine Datenbank"><br><br><button type="submit">Datenbank erstellen</button></form><h1>Meine Datenbanken</h1><div id="database-list">${cards || '<div class="card"><p>Noch keine Datenbank vorhanden.</p></div>'}</div><script>document.querySelector('#create-db').addEventListener('submit',async event=>{event.preventDefault();const name=document.querySelector('#db-name').value;const response=await fetch('/api/databases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});if(response.ok)location.reload();else alert(await response.text())});async function deleteDatabase(id){if(!confirm('Datenbank wirklich löschen?'))return;const response=await fetch('/api/databases/'+encodeURIComponent(id),{method:'DELETE'});if(response.ok)location.reload();else alert(await response.text())}</script>`);
+}
+
+function databaseDetailPage(database, items) {
+  const rows = items.map(item => {
+    let data = item.json_data;
+    try { data = JSON.stringify(JSON.parse(item.json_data), null, 2); } catch {}
+    const date = new Date(item.created_at).toLocaleString('de-DE');
+    return `<article class="card"><div class="page-row"><strong>${escapeHtml(item.name)}</strong><span class="muted">${escapeHtml(date)}</span></div><pre style="white-space:pre-wrap">${escapeHtml(data)}</pre></article>`;
+  }).join('');
+  return htmlPage(database.name, `<div class="top"><div><div class="brand">${escapeHtml(database.name)}</div><div class="muted">Datenbankeinträge</div></div><a class="button secondary" href="/databases">Zur Übersicht</a></div>${rows || '<div class="card"><p>Diese Datenbank enthält noch keine Einträge.</p></div>'}`);
 }
 
 function editorPage(page = null) {
@@ -303,10 +313,19 @@ export default {
       if (!session) return redirectResponse(`${url.origin}/auth/google`);
       if (!env.DB) return new Response('D1-Datenbank ist nicht konfiguriert.', { status: 500 });
       const credits = await getMonthlyCredits(env, session.sub);
-      const remaining = await chargeCredits(env, session.sub, 5);
-      if (remaining === null) return new Response('Nicht genügend Credits für diesen Datenbank-Lesezugriff.', { status: 402 });
       const result = await env.DB.prepare('SELECT id, name FROM user_databases WHERE owner_sub = ? ORDER BY name').bind(session.sub).all();
-      return new Response(databasePage(result.results || [], remaining), { headers: privateHeaders() });
+      return new Response(databasePage(result.results || [], credits), { headers: privateHeaders() });
+    }
+
+    if (path.startsWith('databases/') && request.method === 'GET') {
+      const session = await getSession(request, env);
+      if (!session) return redirectResponse(`${url.origin}/auth/google`);
+      if (!env.DB) return new Response('D1-Datenbank ist nicht konfiguriert.', { status: 500 });
+      const id = cleanSlug(decodeURIComponent(path.slice('databases/'.length)));
+      const database = await env.DB.prepare('SELECT id, name FROM user_databases WHERE id = ? AND owner_sub = ?').bind(id, session.sub).first();
+      if (!database) return new Response('Datenbank nicht gefunden.', { status: 404 });
+      const items = await env.DB.prepare('SELECT id, name, json_data, created_at FROM database_items WHERE database_id = ? AND owner_sub = ? ORDER BY created_at DESC').bind(id, session.sub).all();
+      return new Response(databaseDetailPage(database, items.results || []), { headers: privateHeaders() });
     }
 
     if (path === 'api/databases' || path.startsWith('api/databases/')) {
