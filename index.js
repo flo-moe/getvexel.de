@@ -41,6 +41,43 @@ async function verifySession(secret, signed) {
   } catch { return null; }
 }
 
+function assertSameOrigin(request, url) {
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) {
+    const origin = request.headers.get('Origin');
+    if (!origin || origin !== url.origin) return false;
+    const secFetchSite = request.headers.get('Sec-Fetch-Site');
+    if (secFetchSite && secFetchSite !== 'same-origin' && secFetchSite !== 'none') return false;
+  }
+  return true;
+}
+
+async function sha256Base64Url(value) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return base64Url(digest);
+}
+
+async function verifyGoogleIdToken(idToken, clientId, nonce) {
+  const parts = idToken.split('.');
+  if (parts.length !== 3) throw new Error('Ungültiges Google-ID-Token');
+  const payload = JSON.parse(new TextDecoder().decode(unbase64Url(parts[1])));
+  if (payload.aud !== clientId) throw new Error('Ungültige Token-Zielgruppe');
+  if (payload.iss !== 'https://accounts.google.com' && payload.iss !== 'accounts.google.com') throw new Error('Ungültiger Token-Aussteller');
+  if (payload.exp * 1000 <= Date.now()) throw new Error('Token abgelaufen');
+  if (nonce && payload.nonce !== nonce) throw new Error('Ungültige OAuth-Nonce');
+  if (payload.email_verified !== true) throw new Error('Google-E-Mail ist nicht verifiziert');
+
+  const jwksResponse = await fetch('https://www.googleapis.com/oauth2/v3/certs');
+  if (!jwksResponse.ok) throw new Error('Google-Schlüssel konnten nicht geladen werden');
+  const jwks = await jwksResponse.json();
+  const header = JSON.parse(new TextDecoder().decode(unbase64Url(parts[0])));
+  const key = (jwks.keys || []).find(item => item.kid === header.kid);
+  if (!key) throw new Error('Google-Signaturschlüssel nicht gefunden');
+  const cryptoKey = await crypto.subtle.importKey('jwk', key, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
+  const valid = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', cryptoKey, unbase64Url(parts[2]), new TextEncoder().encode(parts[0] + '.' + parts[1])).catch(() => false);
+  if (!valid) throw new Error('Ungültige Google-Signatur');
+  return payload;
+}
+
 function getCookie(request, name) {
   const match = request.headers.get('Cookie')?.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
   return match ? decodeURIComponent(match[1]) : null;
@@ -70,8 +107,8 @@ function shell(title, body) {
   </style></head><body><main class="wrap">${body}</main></body></html>`;
 }
 
-function dashboard(user, pages, origin, credits) {
-  const rows = pages.map(page => `<article class="card row"><div><strong>${escapeHtml(page.slug)}</strong><div class="muted">${escapeHtml(origin)}/${escapeHtml(page.slug)}</div></div><div class="actions"><a class="button secondary" href="/${encodeURIComponent(page.slug)}" target="_blank">Ansehen</a><a class="button" href="/dashboard/edit/${encodeURIComponent(page.slug)}">Bearbeiten</a><button class="danger" type="button" onclick="removePage('${escapeHtml(page.slug)}')">Löschen</button></div></article>`).join('');
+function dashboard(user, pages, pagesOrigin, credits) {
+  const rows = pages.map(page => `<article class="card row"><div><strong>${escapeHtml(page.slug)}</strong><div class="muted">${escapeHtml(pagesOrigin)}/${escapeHtml(page.slug)}</div></div><div class="actions"><a class="button secondary" href="${escapeHtml(pagesOrigin)}/${encodeURIComponent(page.slug)}" target="_blank" rel="noopener noreferrer">Ansehen</a><a class="button" href="/dashboard/edit/${encodeURIComponent(page.slug)}">Bearbeiten</a><button class="danger" type="button" onclick="removePage('${escapeHtml(page.slug)}')">Löschen</button></div></article>`).join('');
   return shell('Dashboard', `<div class="top"><div><div class="brand">GetVexel</div><div class="muted">${escapeHtml(user.email)} · ${credits} Credits</div></div><div class="actions"><a class="button" href="/dashboard/new">Neue Seite</a><a class="button secondary" href="/databases">Datenbanken</a><a class="button secondary" href="/auth/logout">Abmelden</a></div></div><h1>Meine Seiten</h1>${rows || '<div class="card"><p>Noch keine Seite erstellt.</p></div>'}<script>async function removePage(slug){if(!confirm('Seite wirklich löschen?'))return;const r=await fetch('/api/pages/'+encodeURIComponent(slug),{method:'DELETE'});if(r.ok)location.reload();else alert(await r.text())}</script>`);
 }
 
@@ -128,6 +165,15 @@ function editorPage(page = null) {
   `);
 }
 
+function validImageBytes(bytes) {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) return 'image/png';
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  if (bytes.length >= 6 && String.fromCharCode(...bytes.slice(0, 6)) === 'GIF87a') return 'image/gif';
+  if (bytes.length >= 6 && String.fromCharCode(...bytes.slice(0, 6)) === 'GIF89a') return 'image/gif';
+  if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF' && String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP') return 'image/webp';
+  return null;
+}
+
 async function monthlyCredits(env, ownerSub) {
   const month = new Date().toISOString().slice(0, 7);
   let account = await env.DB.prepare('SELECT credits, month FROM user_credits WHERE owner_sub=?').bind(ownerSub).first();
@@ -149,10 +195,15 @@ export default {
     try { path = decodeURIComponent(url.pathname).replace(/^\/+|\/+$/g, ''); } catch { return new Response('Ungültiger Pfad', { status: 400 }); }
 
     if (!env.PAGES_KV) return new Response('PAGES_KV fehlt.', { status: 500 });
+    if (!assertSameOrigin(request, url)) return new Response('Cross-Origin-Anfrage nicht erlaubt.', { status: 403 });
 
     if (path === 'auth/google' && request.method === 'GET') {
       if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.SESSION_SECRET) return new Response('Google-OAuth ist nicht konfiguriert.', { status: 500 });
       const state = crypto.randomUUID();
+      const nonce = crypto.randomUUID();
+      const verifierBytes = crypto.getRandomValues(new Uint8Array(32));
+      const verifier = base64Url(verifierBytes);
+      const challenge = await sha256Base64Url(verifier);
       const callback = `${url.origin}/auth/callback`;
       const authorize = new URL('https://accounts.google.com/o/oauth2/v2/auth');
       authorize.searchParams.set('client_id', env.GOOGLE_CLIENT_ID);
@@ -161,25 +212,34 @@ export default {
       authorize.searchParams.set('scope', 'openid email profile');
       authorize.searchParams.set('prompt', 'select_account');
       authorize.searchParams.set('state', state);
-      return redirect(authorize.toString(), 302, [cookie(STATE_COOKIE, state, 'Max-Age=600')]);
+      authorize.searchParams.set('nonce', nonce);
+      authorize.searchParams.set('code_challenge', challenge);
+      authorize.searchParams.set('code_challenge_method', 'S256');
+      const oauthCookie = base64Url(new TextEncoder().encode(JSON.stringify({ state, nonce, verifier })));
+      return redirect(authorize.toString(), 302, [cookie(STATE_COOKIE, oauthCookie, 'Max-Age=600')]);
     }
 
     if (path === 'auth/callback' && request.method === 'GET') {
       try {
         const code = url.searchParams.get('code');
         const state = url.searchParams.get('state');
-        if (!code || !state || state !== getCookie(request, STATE_COOKIE)) return new Response('Ungültige OAuth-Anmeldung.', { status: 400 });
+        const oauthCookie = getCookie(request, STATE_COOKIE);
+        if (!code || !state || !oauthCookie) return new Response('Ungültige OAuth-Anmeldung.', { status: 400 });
+        let oauthData;
+        try { oauthData = JSON.parse(new TextDecoder().decode(unbase64Url(oauthCookie))); } catch { return new Response('Ungültige OAuth-Anmeldung.', { status: 400 }); }
+        if (state !== oauthData.state) return new Response('Ungültiger OAuth-State.', { status: 400 });
+
         const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
           method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ code, client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET, redirect_uri: `${url.origin}/auth/callback`, grant_type: 'authorization_code' })
+          body: new URLSearchParams({ code, client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET, redirect_uri: `${url.origin}/auth/callback`, grant_type: 'authorization_code', code_verifier: oauthData.verifier })
         });
         if (!tokenResponse.ok) return new Response('Google-Anmeldung fehlgeschlagen.', { status: 401 });
         const tokens = await tokenResponse.json();
-        const profileResponse = await fetch('https://openidconnect.googleapis.com/v1/userinfo', { headers: { Authorization: 'Bearer ' + tokens.access_token } });
-        if (!profileResponse.ok) return new Response('Google-Profil konnte nicht geladen werden.', { status: 401 });
-        const profile = await profileResponse.json();
-        if (!profile.sub || !profile.email) return new Response('Google-Konto ist unvollständig.', { status: 401 });
-        const signed = await signSession(env.SESSION_SECRET, { sub: profile.sub, email: profile.email, name: profile.name || '', exp: Date.now() + 604800000 });
+        if (!tokens.id_token) return new Response('Google-ID-Token fehlt.', { status: 401 });
+        const claims = await verifyGoogleIdToken(tokens.id_token, env.GOOGLE_CLIENT_ID, oauthData.nonce);
+        if (!claims.sub || !claims.email || claims.email_verified !== true) return new Response('Google-Konto ist unvollständig oder die E-Mail ist nicht verifiziert.', { status: 401 });
+
+        const signed = await signSession(env.SESSION_SECRET, { sub: claims.sub, email: claims.email, name: claims.name || '', exp: Date.now() + 604800000 });
         return redirect(`${url.origin}/dashboard`, 303, [cookie(SESSION_COOKIE, signed, 'Max-Age=604800'), cookie(STATE_COOKIE, '', 'Max-Age=0')]);
       } catch (error) {
         return new Response(`OAuth-Fehler: ${error.message || error.name}`, { status: 500 });
@@ -212,7 +272,8 @@ export default {
         let credits = 5000;
         if (env.DB) credits = await monthlyCredits(env, user.sub);
         pages.sort((a, b) => a.slug.localeCompare(b.slug));
-        return new Response(dashboard(user, pages, url.origin, credits), { headers: privateHeaders() });
+        const pagesOrigin = url.origin.replace('://getvexel.', '://getvexel-pages.');
+        return new Response(dashboard(user, pages, pagesOrigin, credits), { headers: privateHeaders() });
       }
 
       if (path === 'dashboard/new') return new Response(templatesPage(), { headers: privateHeaders() });
@@ -256,10 +317,15 @@ export default {
         let body; try { body = await request.json(); } catch { return new Response('Ungültige Daten.', { status: 400 }); }
         const name = String(body.name || '').trim().slice(0, 40);
         if (!name) return new Response('Name fehlt.', { status: 400 });
-        const count = await env.DB.prepare('SELECT COUNT(*) count FROM user_databases WHERE owner_sub=?').bind(user.sub).first();
-        if ((count?.count || 0) >= 3) return new Response('Maximal drei Datenbanken.', { status: 409 });
         const databaseId = crypto.randomUUID();
-        await env.DB.prepare('INSERT INTO user_databases(id, owner_sub, name) VALUES(?, ?, ?)').bind(databaseId, user.sub, name).run();
+        try {
+          await env.DB.prepare('INSERT INTO user_databases(id, owner_sub, name) VALUES(?, ?, ?)').bind(databaseId, user.sub, name).run();
+        } catch (error) {
+          if (String(error.message || error).includes('database limit reached')) {
+            return new Response('Maximal drei Datenbanken.', { status: 409 });
+          }
+          throw error;
+        }
         return new Response(JSON.stringify({ id: databaseId, name }), { headers: { 'Content-Type': 'application/json' } });
       }
 
@@ -300,22 +366,22 @@ export default {
       if (!user) return new Response('Anmeldung erforderlich.', { status: 401 });
       const form = await request.formData();
       const file = form.get('file');
-      if (!(file instanceof File) || !file.type.startsWith('image/')) return new Response('Keine gültige Bilddatei.', { status: 400 });
+      if (!(file instanceof File)) return new Response('Keine gültige Bilddatei.', { status: 400 });
       if (file.size > 2097152) return new Response('Bild zu groß.', { status: 413 });
       const bytes = new Uint8Array(await file.arrayBuffer());
+      const detectedType = validImageBytes(bytes);
+      if (!detectedType) return new Response('Nur PNG, JPEG, GIF oder WebP sind erlaubt.', { status: 415 });
       let binary = '';
       for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
       const id = crypto.randomUUID();
-      await env.PAGES_KV.put(`asset:${id}`, JSON.stringify({ owner: user.sub, type: file.type, data: btoa(binary) }));
-      return new Response(JSON.stringify({ url: `${url.origin}/assets/${id}` }), { headers: { 'Content-Type': 'application/json' } });
+      await env.PAGES_KV.put(`asset:${id}`, JSON.stringify({ owner: user.sub, type: detectedType, data: btoa(binary) }));
+      const pagesOrigin = url.origin.replace('://getvexel.', '://getvexel-pages.');
+      return new Response(JSON.stringify({ url: `${pagesOrigin}/assets/${id}` }), { headers: { 'Content-Type': 'application/json' } });
     }
 
     if (path.startsWith('assets/') && request.method === 'GET') {
-      const id = cleanSlug(path.slice('assets/'.length));
-      const asset = await env.PAGES_KV.get(`asset:${id}`, 'json');
-      if (!asset) return new Response('Bild nicht gefunden.', { status: 404 });
-      const binary = atob(asset.data);
-      return new Response(Uint8Array.from(binary, ch => ch.charCodeAt(0)), { headers: { 'Content-Type': asset.type || 'application/octet-stream', 'Cache-Control': 'public, max-age=31536000' } });
+      const pagesOrigin = url.origin.replace('://getvexel.', '://getvexel-pages.');
+      return redirect(`${pagesOrigin}/${path}`, 302);
     }
 
     if (path === 'api/pages' || path.startsWith('api/pages/')) {
@@ -365,9 +431,15 @@ export default {
 
     if (request.method === 'GET' && path) {
       const saved = await env.PAGES_KV.get(`page:${path}`);
-      if (saved !== null) return new Response(saved, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'X-Content-Type-Options': 'nosniff' } });
+      if (saved !== null) {
+        const pagesOrigin = url.origin.replace('://getvexel.', '://getvexel-pages.');
+        return redirect(`${pagesOrigin}/${encodeURIComponent(path)}`, 302);
+      }
       const legacy = await env.PAGES_KV.get(path);
-      if (legacy !== null) return new Response(legacy, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'X-Content-Type-Options': 'nosniff' } });
+      if (legacy !== null) {
+        const pagesOrigin = url.origin.replace('://getvexel.', '://getvexel-pages.');
+        return redirect(`${pagesOrigin}/${encodeURIComponent(path)}`, 302);
+      }
     }
 
     return new Response(shell('404', '<section class="card"><h1>404</h1><p>Diese Seite existiert nicht.</p><a class="button" href="/">Zur Startseite</a></section>'), { status: 404, headers: privateHeaders() });

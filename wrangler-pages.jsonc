@@ -1,0 +1,8 @@
+{
+  "name": "getvexel-pages",
+  "main": "pages.js",
+  "compatibility_date": "2026-11-15",
+  "kv_namespaces": [
+    { "binding": "PAGES_KV", "id": "c202b13affaa405798e7b386de5fda85" }
+  ]
+}
