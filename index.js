@@ -276,7 +276,8 @@ export default {
         const signed = await signSession(env.SESSION_SECRET, { sub: claims.sub, email: claims.email, name: claims.name || '', exp: Date.now() + 604800000 });
         return redirect(`${url.origin}/dashboard`, 303, [cookie(SESSION_COOKIE, signed, 'Max-Age=604800'), cookie(STATE_COOKIE, '', 'Max-Age=0')]);
       } catch (error) {
-        return new Response(`OAuth-Fehler: ${error.message || error.name}`, { status: 500 });
+        console.error('OAuth callback failed', error.name);
+        return new Response('Google-Anmeldung konnte nicht abgeschlossen werden.', { status: 500 });
       }
     }
 
@@ -301,7 +302,8 @@ export default {
         for (const key of listing.keys) {
           const slug = key.name.slice(`owner:${user.sub}:`.length);
           const html = await env.PAGES_KV.get(`page:${slug}`);
-          if (html !== null) pages.push({ slug, html });
+          const meta = await env.PAGES_KV.get(`meta:${slug}`, 'json');
+          if (html !== null && meta?.owner === user.sub) pages.push({ slug, html });
         }
         let credits = 5000;
         if (env.DB) credits = await monthlyCredits(env, user.sub);
@@ -349,6 +351,7 @@ export default {
 
       if (request.method === 'POST' && path === 'api/databases') {
         let body; try { body = await request.json(); } catch { return new Response('Ungültige Daten.', { status: 400 }); }
+        if (!body || typeof body !== 'object' || Array.isArray(body)) return new Response('Ungültige Daten.', { status: 400 });
         const name = String(body.name || '').trim().slice(0, 40);
         if (!name) return new Response('Name fehlt.', { status: 400 });
         const databaseId = crypto.randomUUID();
@@ -367,6 +370,7 @@ export default {
         const owned = await env.DB.prepare('SELECT id FROM user_databases WHERE id=? AND owner_sub=?').bind(id, user.sub).first();
         if (!owned) return new Response('Datenbank nicht gefunden.', { status: 404 });
         let body; try { body = await request.json(); } catch { return new Response('Ungültige Daten.', { status: 400 }); }
+        if (!body || typeof body !== 'object' || Array.isArray(body)) return new Response('Ungültige Daten.', { status: 400 });
         await monthlyCredits(env, user.sub);
         const itemId = crypto.randomUUID();
         const insert = env.DB.prepare('INSERT INTO database_items(id,database_id,owner_sub,name,json_data,created_at) SELECT ?,?,?,?, ?,? WHERE EXISTS (SELECT 1 FROM user_credits WHERE owner_sub=? AND credits>=10)').bind(itemId, id, user.sub, String(body.name || 'Eintrag').slice(0, 80), JSON.stringify(body.data || {}), Date.now(), user.sub);
@@ -429,6 +433,8 @@ export default {
         const requestLength = Number(request.headers.get('Content-Length') || 0);
         if (requestLength > 1200000) return new Response('Projekt ist zu groß.', { status: 413 });
         let body; try { body = await request.json(); } catch { return new Response('Ungültige Daten.', { status: 400 }); }
+        if (!body || typeof body !== 'object' || Array.isArray(body)) return new Response('Ungültige Daten.', { status: 400 });
+        if (body.project !== undefined && (!body.project || typeof body.project !== 'object' || Array.isArray(body.project))) return new Response('Ungültiges Projektformat.', { status: 400 });
         const name = cleanSlug(body.slug || '');
         if (!name) return new Response('Seitennamen eingeben.', { status: 400 });
         if (!body.project || typeof body.project.html !== 'string') body.project = { html: String(body.html || ''), css: '', js: '' };
@@ -438,14 +444,17 @@ export default {
         const totalSize = body.project.html.length + body.project.css.length + body.project.js.length;
         if (totalSize > 1000000) return new Response('Projekt ist zu groß.', { status: 413 });
 
-        let reservation;
         try {
-          reservation = await env.DB.prepare('INSERT INTO reserved_slugs(slug, owner_sub) VALUES(?, ?)').bind(name, user.sub).run();
+          await env.DB.prepare('INSERT INTO reserved_slugs(slug, owner_sub, status) VALUES(?, ?, ?)').bind(name, user.sub, 'pending').run();
         } catch (error) {
           if (String(error.message || error).includes('UNIQUE') || String(error.message || error).includes('PRIMARY')) {
-            return new Response('Seitenname bereits vergeben.', { status: 409 });
-          }
-          throw error;
+            const existing = await env.DB.prepare('SELECT owner_sub, status FROM reserved_slugs WHERE slug=?').bind(name).first();
+            if (!existing) return new Response('Seitenname konnte nicht geprüft werden.', { status: 409 });
+            if (existing.owner_sub !== user.sub) return new Response('Seitenname bereits vergeben.', { status: 409 });
+            const pageExists = await env.PAGES_KV.get(`meta:${name}`);
+            if (pageExists) return new Response('Seitenname bereits vergeben.', { status: 409 });
+            if (existing.status !== 'pending') return new Response('Seitenname wird geprüft oder ist bereits vergeben.', { status: 409 });
+          } else throw error;
         }
 
         const html = combineProject(body.project);
@@ -454,9 +463,11 @@ export default {
           await env.PAGES_KV.put(`project:${name}`, JSON.stringify(body.project));
           await env.PAGES_KV.put(`meta:${name}`, JSON.stringify({ owner: user.sub, updatedAt: Date.now() }));
           await env.PAGES_KV.put(`owner:${user.sub}:${name}`, '1');
+          await env.DB.prepare("UPDATE reserved_slugs SET status='complete' WHERE slug=? AND owner_sub=?").bind(name, user.sub).run();
         } catch (error) {
-          await env.DB.prepare('DELETE FROM reserved_slugs WHERE slug=? AND owner_sub=?').bind(name, user.sub).run();
-          throw error;
+          await env.DB.prepare("UPDATE reserved_slugs SET status='pending' WHERE slug=? AND owner_sub=?").bind(name, user.sub).run();
+          console.error('Incomplete page creation', name);
+          return new Response('Seite konnte nicht vollständig veröffentlicht werden. Bitte erneut versuchen.', { status: 500 });
         }
         return new Response('OK');
       }
@@ -468,6 +479,8 @@ export default {
         const requestLength = Number(request.headers.get('Content-Length') || 0);
         if (requestLength > 1200000) return new Response('Projekt ist zu groß.', { status: 413 });
         let body; try { body = await request.json(); } catch { return new Response('Ungültige Daten.', { status: 400 }); }
+        if (!body || typeof body !== 'object' || Array.isArray(body)) return new Response('Ungültige Daten.', { status: 400 });
+        if (body.project !== undefined && (!body.project || typeof body.project !== 'object' || Array.isArray(body.project))) return new Response('Ungültiges Projektformat.', { status: 400 });
         if (!body.project) body.project = { html: String(body.html || ''), css: '', js: '' };
         body.project.css = String(body.project.css || '');
         body.project.js = String(body.project.js || '');
