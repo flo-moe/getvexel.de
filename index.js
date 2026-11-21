@@ -139,6 +139,19 @@ function databaseDetailPage(database, items) {
   return htmlPage(database.name, `<div class="top"><div><div class="brand">${escapeHtml(database.name)}</div><div class="muted">Datenbankeinträge</div></div><a class="button secondary" href="/databases">Zur Übersicht</a></div>${rows || '<div class="card"><p>Diese Datenbank enthält noch keine Einträge.</p></div>'}`);
 }
 
+const pageTemplates = {
+  blank: { name: 'Leere Seite', html: '<h1>Meine neue Seite</h1>\n<p>Hier beginnt dein Inhalt.</p>', css: '', js: '' },
+  landing: { name: 'Landingpage', html: `<header style="padding:24px 8%;display:flex;justify-content:space-between;align-items:center"><strong>Meine Marke</strong><button>Kontakt</button></header><main style="padding:100px 8%;text-align:center;background:#eef4ff"><h1 style="font-size:56px;margin:0">Dein großes Angebot</h1><p style="font-size:20px">Ein klarer Text, der Besucher überzeugt.</p><button style="padding:14px 24px">Jetzt starten</button></main>`, css: 'body{margin:0;font-family:system-ui,sans-serif}button{border:0;border-radius:8px;background:#2563eb;color:white}', js: '' },
+  shop: { name: 'Online-Shop', html: `<nav style="padding:20px 8%;display:flex;justify-content:space-between"><strong>Mein Shop</strong><span>Warenkorb (0)</span></nav><main style="padding:50px 8%"><h1>Unsere Produkte</h1><section style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px"><article style="border:1px solid #ddd;padding:20px"><div style="height:180px;background:#eee"></div><h3>Produkt 1</h3><p>29,99 €</p><button>In den Warenkorb</button></article><article style="border:1px solid #ddd;padding:20px"><div style="height:180px;background:#eee"></div><h3>Produkt 2</h3><p>39,99 €</p><button>In den Warenkorb</button></article><article style="border:1px solid #ddd;padding:20px"><div style="height:180px;background:#eee"></div><h3>Produkt 3</h3><p>49,99 €</p><button>In den Warenkorb</button></article></section></main>`, css: 'body{margin:0;font-family:system-ui,sans-serif}button{border:0;border-radius:6px;background:#111;color:white;padding:10px 14px}article{box-sizing:border-box}', js: '' },
+  portfolio: { name: 'Portfolio', html: `<main style="min-height:100vh;padding:80px 10%;background:#111;color:white"><p>FOTO · DESIGN · PROJEKTE</p><h1 style="font-size:64px;max-width:700px">Ich gestalte klare digitale Erlebnisse.</h1><a href="#projekte" style="color:white">Meine Projekte ansehen</a></main><section id="projekte" style="padding:80px 10%"><h2>Ausgewählte Arbeiten</h2></section>`, css: 'body{margin:0;font-family:system-ui,sans-serif}', js: '' },
+  blog: { name: 'Blog', html: `<header style="padding:30px 8%;border-bottom:1px solid #ddd"><strong>Mein Blog</strong></header><main style="max-width:800px;margin:auto;padding:60px 20px"><p style="color:#777">KATEGORIE · 21. November 2026</p><h1>Der erste Blogartikel</h1><p>Ein kurzer Einleitungstext für deinen neuen Beitrag.</p><h2>Ein Abschnitt</h2><p>Weiterer Inhalt für deine Leser.</p></main>`, css: 'body{margin:0;font-family:Georgia,serif}header{font-family:system-ui,sans-serif}', js: '' }
+};
+
+function templatePage() {
+  const cards = Object.entries(pageTemplates).map(([key, template]) => `<article class="card" style="margin:0"><h2>${escapeHtml(template.name)}</h2><p>${{ blank: 'Mit einer leeren Seite beginnen', landing: 'Für Produkte, Unternehmen oder Angebote', shop: 'Mit Produktkarten und Warenkorb-Aufbau', portfolio: 'Für Arbeiten und persönliche Projekte', blog: 'Für Artikel und Beiträge' }[key]}</p><a class="button" href="/dashboard/template/${key}">Vorlage verwenden</a></article>`).join('');
+  return htmlPage('Vorlagen', `<div class="top"><div><div class="brand">GetVexel Vorlagen</div><div class="muted">Wähle eine Vorlage für dein neues Projekt</div></div><a class="button secondary" href="/dashboard">Zur Übersicht</a></div><div class="grid" style="grid-template-columns:repeat(3,minmax(0,1fr))">${cards}</div>`);
+}
+
 function editorPage(page = null) {
   const slug = page?.slug || '';
   const content = page?.html || '<h1>Meine neue Seite</h1>\n<p>Hallo Welt!</p>';
@@ -297,7 +310,14 @@ export default {
       }
 
       if (path === 'dashboard/new') {
-        return new Response(editorPage(), { headers: privateHeaders() });
+        return new Response(templatePage(), { headers: privateHeaders() });
+      }
+
+      if (path.startsWith('dashboard/template/')) {
+        const templateName = cleanSlug(path.slice('dashboard/template/'.length));
+        const template = pageTemplates[templateName];
+        if (!template) return new Response('Vorlage nicht gefunden.', { status: 404 });
+        return new Response(editorPage({ project: template }), { headers: privateHeaders() });
       }
 
       const slug = cleanSlug(decodeURIComponent(path.slice('dashboard/edit/'.length)));
