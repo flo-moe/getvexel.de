@@ -70,6 +70,7 @@ async function verifyGoogleIdToken(idToken, clientId, nonce) {
   if (!jwksResponse.ok) throw new Error('Google-Schlüssel konnten nicht geladen werden');
   const jwks = await jwksResponse.json();
   const header = JSON.parse(new TextDecoder().decode(unbase64Url(parts[0])));
+  if (header.alg !== 'RS256') throw new Error('Ungültiger Signaturalgorithmus');
   const key = (jwks.keys || []).find(item => item.kid === header.kid);
   if (!key) throw new Error('Google-Signaturschlüssel nicht gefunden');
   const cryptoKey = await crypto.subtle.importKey('jwk', key, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
@@ -97,8 +98,36 @@ async function currentUser(request, env) {
   return verifySession(env.SESSION_SECRET, getCookie(request, SESSION_COOKIE));
 }
 
+function getPagesOrigin(env, url) {
+  if (env.PAGES_ORIGIN) return env.PAGES_ORIGIN.replace(/\/+$/, '');
+  const host = url.hostname;
+  if (host === 'getvexel.flomoe.workers.dev') return 'https://getvexel-pages.flomoe.workers.dev';
+  return url.origin;
+}
+
 function privateHeaders(extra = {}) {
   return { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store, no-cache, must-revalidate, private', 'Pragma': 'no-cache', ...extra };
+}
+
+function combineProject(project) {
+  const html = String(project?.html || '');
+  const css = String(project?.css || '').replace(/<\/?style[^>]*>/gi, '');
+  const js = String(project?.js || '').replace(/<\/?script[^>]*>/gi, '');
+  if (html.toLowerCase().includes('<html')) {
+    let output = html;
+    if (css) {
+      output = output.includes('</head>')
+        ? output.replace('</head>', `<style>${css}</style></head>`)
+        : output.replace('<head>', `<head><style>${css}</style>`);
+    }
+    if (js) {
+      output = output.includes('</body>')
+        ? output.replace('</body>', `<script>${js}<\/script></body>`)
+        : output + `<script>${js}<\/script>`;
+    }
+    return output;
+  }
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style></head><body>${html}<script>${js}<\/script></body></html>`;
 }
 
 function shell(title, body) {
@@ -109,7 +138,7 @@ function shell(title, body) {
 
 function dashboard(user, pages, pagesOrigin, credits) {
   const rows = pages.map(page => `<article class="card row"><div><strong>${escapeHtml(page.slug)}</strong><div class="muted">${escapeHtml(pagesOrigin)}/${escapeHtml(page.slug)}</div></div><div class="actions"><a class="button secondary" href="${escapeHtml(pagesOrigin)}/${encodeURIComponent(page.slug)}" target="_blank" rel="noopener noreferrer">Ansehen</a><a class="button" href="/dashboard/edit/${encodeURIComponent(page.slug)}">Bearbeiten</a><button class="danger" type="button" onclick="removePage('${escapeHtml(page.slug)}')">Löschen</button></div></article>`).join('');
-  return shell('Dashboard', `<div class="top"><div><div class="brand">GetVexel</div><div class="muted">${escapeHtml(user.email)} · ${credits} Credits</div></div><div class="actions"><a class="button" href="/dashboard/new">Neue Seite</a><a class="button secondary" href="/databases">Datenbanken</a><a class="button secondary" href="/auth/logout">Abmelden</a></div></div><h1>Meine Seiten</h1>${rows || '<div class="card"><p>Noch keine Seite erstellt.</p></div>'}<script>async function removePage(slug){if(!confirm('Seite wirklich löschen?'))return;const r=await fetch('/api/pages/'+encodeURIComponent(slug),{method:'DELETE'});if(r.ok)location.reload();else alert(await r.text())}</script>`);
+  return shell('Dashboard', `<div class="top"><div><div class="brand">GetVexel</div><div class="muted">${escapeHtml(user.email)} · ${credits} Credits</div></div><div class="actions"><a class="button" href="/dashboard/new">Neue Seite</a><a class="button secondary" href="/databases">Datenbanken</a><form method="POST" action="/auth/logout"><button class="button secondary" type="submit">Abmelden</button></form></div></div><h1>Meine Seiten</h1>${rows || '<div class="card"><p>Noch keine Seite erstellt.</p></div>'}<script>async function removePage(slug){if(!confirm('Seite wirklich löschen?'))return;const r=await fetch('/api/pages/'+encodeURIComponent(slug),{method:'DELETE'});if(r.ok)location.reload();else alert(await r.text())}</script>`);
 }
 
 const TEMPLATES = {
@@ -175,17 +204,14 @@ function validImageBytes(bytes) {
 }
 
 async function monthlyCredits(env, ownerSub) {
+  if (!env.DB) return 5000;
   const month = new Date().toISOString().slice(0, 7);
-  let account = await env.DB.prepare('SELECT credits, month FROM user_credits WHERE owner_sub=?').bind(ownerSub).first();
-  if (!account) {
-    await env.DB.prepare('INSERT INTO user_credits(owner_sub, month, credits) VALUES(?, ?, 5000)').bind(ownerSub, month).run();
-    return 5000;
-  }
-  if (account.month !== month) {
-    await env.DB.prepare('UPDATE user_credits SET month=?, credits=5000 WHERE owner_sub=?').bind(month, ownerSub).run();
-    return 5000;
-  }
-  return account.credits;
+  await env.DB.batch([
+    env.DB.prepare('INSERT OR IGNORE INTO user_credits(owner_sub, month, credits) VALUES(?, ?, 5000)').bind(ownerSub, month),
+    env.DB.prepare('UPDATE user_credits SET month=?, credits=5000 WHERE owner_sub=? AND month<>?').bind(month, ownerSub, month)
+  ]);
+  const account = await env.DB.prepare('SELECT credits, month FROM user_credits WHERE owner_sub=?').bind(ownerSub).first();
+  return account?.credits ?? 5000;
 }
 
 export default {
@@ -246,7 +272,7 @@ export default {
       }
     }
 
-    if (path === 'auth/logout' && request.method === 'GET') {
+    if (path === 'auth/logout' && request.method === 'POST') {
       return redirect(`${url.origin}/`, 303, [cookie(SESSION_COOKIE, '', 'Max-Age=0')]);
     }
 
@@ -272,7 +298,7 @@ export default {
         let credits = 5000;
         if (env.DB) credits = await monthlyCredits(env, user.sub);
         pages.sort((a, b) => a.slug.localeCompare(b.slug));
-        const pagesOrigin = url.origin.replace('://getvexel.', '://getvexel-pages.');
+        const pagesOrigin = getPagesOrigin(env, url);
         return new Response(dashboard(user, pages, pagesOrigin, credits), { headers: privateHeaders() });
       }
 
@@ -375,12 +401,12 @@ export default {
       for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
       const id = crypto.randomUUID();
       await env.PAGES_KV.put(`asset:${id}`, JSON.stringify({ owner: user.sub, type: detectedType, data: btoa(binary) }));
-      const pagesOrigin = url.origin.replace('://getvexel.', '://getvexel-pages.');
+      const pagesOrigin = getPagesOrigin(env, url);
       return new Response(JSON.stringify({ url: `${pagesOrigin}/assets/${id}` }), { headers: { 'Content-Type': 'application/json' } });
     }
 
     if (path.startsWith('assets/') && request.method === 'GET') {
-      const pagesOrigin = url.origin.replace('://getvexel.', '://getvexel-pages.');
+      const pagesOrigin = getPagesOrigin(env, url);
       return redirect(`${pagesOrigin}/${path}`, 302);
     }
 
@@ -432,12 +458,12 @@ export default {
     if (request.method === 'GET' && path) {
       const saved = await env.PAGES_KV.get(`page:${path}`);
       if (saved !== null) {
-        const pagesOrigin = url.origin.replace('://getvexel.', '://getvexel-pages.');
+        const pagesOrigin = getPagesOrigin(env, url);
         return redirect(`${pagesOrigin}/${encodeURIComponent(path)}`, 302);
       }
       const legacy = await env.PAGES_KV.get(path);
       if (legacy !== null) {
-        const pagesOrigin = url.origin.replace('://getvexel.', '://getvexel-pages.');
+        const pagesOrigin = getPagesOrigin(env, url);
         return redirect(`${pagesOrigin}/${encodeURIComponent(path)}`, 302);
       }
     }

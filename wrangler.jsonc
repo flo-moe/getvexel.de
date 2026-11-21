@@ -8,6 +8,9 @@
       "id": "c202b13affaa405798e7b386de5fda85"
     }
   ],
+  "vars": {
+    "PAGES_ORIGIN": "https://getvexel-pages.flomoe.workers.dev"
+  },
   "d1_databases": [
     {
       "binding": "DB",
