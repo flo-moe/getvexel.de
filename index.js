@@ -147,15 +147,24 @@ function editorPage(page = null) {
       <div class="statusbar"><span id="position">Zeile 1, Spalte 1</span>&nbsp;&nbsp; HTML/CSS/JavaScript</div>
     </div>
     <script>
-      const files=${JSON.stringify(project)};
+      const loadedFiles=${JSON.stringify(project)};
+      const files={html:String(loadedFiles.html||loadedFiles.content||''),css:String(loadedFiles.css||''),js:String(loadedFiles.js||'')};
       let active='html';
       const code=document.querySelector('#code');
       const preview=document.querySelector('#preview');
       const names={html:'index.html',css:'styles.css',js:'script.js'};
-      function showFile(){code.value=files[active];document.querySelector('#active-tab').textContent=names[active];document.querySelectorAll('.file').forEach(button=>button.classList.toggle('active',button.dataset.file===active));updatePreview()}
-      function saveCode(){files[active]=code.value}
+      function saveCode(){if(files[active]!==undefined)files[active]=code.value}
+      function showFile(fileName){
+        saveCode();
+        active=fileName;
+        code.value=String(files[active]||'');
+        document.querySelector('#active-tab').textContent=names[active];
+        document.querySelectorAll('.file').forEach(button=>button.classList.toggle('active',button.dataset.file===active));
+        updatePreview();
+        code.focus();
+      }
       function updatePreview(){saveCode();const html=files.html.includes('<html')?files.html:'<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>'+files.css+'</style></head><body>'+files.html+'<script>'+files.js+'<\\/script></body></html>';preview.srcdoc=html}
-      document.querySelectorAll('.file').forEach(button=>button.onclick=()=>{saveCode();active=button.dataset.file;showFile()});
+      document.querySelectorAll('.file').forEach(button=>button.addEventListener('click',()=>showFile(button.dataset.file));
       code.addEventListener('input',()=>{saveCode();updatePreview();const before=code.value.slice(0,code.selectionStart).split('\\n');document.querySelector('#position').textContent='Zeile '+before.length+', Spalte '+(before.at(-1).length+1)});
       code.addEventListener('keydown',event=>{if(event.key==='Tab'){event.preventEvent?.();event.preventDefault();const start=code.selectionStart,end=code.selectionEnd;code.setRangeText('  ',start,end,'end');saveCode();updatePreview()}});
       document.querySelector('#refresh').onclick=updatePreview;
@@ -170,7 +179,7 @@ function editorPage(page = null) {
       }
       document.querySelector('#save').onclick=async()=>{const response=await saveProject();if(response?.ok)alert('Projekt gespeichert')};
       document.querySelector('#publish').onclick=async()=>{const response=await saveProject();if(response?.ok){window.open('/'+encodeURIComponent(document.querySelector('#slug').value.trim()),'_blank')}};
-      showFile();
+      showFile('html');
     </script>
   `;
   return htmlPage(page ? 'Web-Editor' : 'Neuer Web-Editor', body);
