@@ -291,7 +291,7 @@ export default {
       return new Response(htmlPage('Anmelden', `<section class="card" style="max-width:560px;margin:90px auto;text-align:center"><div class="brand">GetVexel</div><h1>Erstelle deine eigene Webseite</h1><p>Melde dich mit Google an, um Seiten zu veröffentlichen, zu bearbeiten und zu löschen.</p><br><a class="button" href="/auth/google">Mit Google anmelden</a></section>`), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
     }
 
-    if (path === 'dashboard' || path === 'dashboard/new' || path.startsWith('dashboard/edit/')) {
+    if (path === 'dashboard' || path === 'dashboard/new' || path.startsWith('dashboard/edit/') || path.startsWith('dashboard/template/')) {
       if (request.method !== 'GET') return new Response('Method nicht erlaubt', { status: 405 });
       const session = await getSession(request, env);
       if (!session) return redirectResponse(`${url.origin}/auth/google`);
