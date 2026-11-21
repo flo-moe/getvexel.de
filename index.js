@@ -156,71 +156,61 @@ function editorPage(page = null) {
   const slug = page?.slug || '';
   const content = page?.html || '<h1>Meine neue Seite</h1>\n<p>Hallo Welt!</p>';
   const project = page?.project || { html: content, css: '', js: '' };
+  const projectJson = JSON.stringify(project).replace(/<\/script/gi, '<\\/script');
+
   const body = `
     <style>
-      body{overflow:hidden}.shell{max-width:none;height:100vh;padding:0}.ide{height:100vh;background:#1e1e1e;color:#ddd;display:grid;grid-template-rows:44px 1fr 24px}.titlebar{height:44px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:#181818;border-bottom:1px solid #333}.workspace{display:grid;grid-template-columns:180px 1fr 48%;min-height:0}.explorer{background:#252526;border-right:1px solid #333;padding:10px}.file{display:block;width:100%;text-align:left;padding:8px;margin:2px 0;border:0;background:transparent;color:#ddd;cursor:pointer}.file.active{background:#37373d;color:#fff}.editor-pane{display:flex;flex-direction:column;min-width:0}.editor-tabs{height:36px;background:#252526;border-bottom:1px solid #333}.tab{height:36px;padding:0 14px;border:0;border-right:1px solid #333;background:#1e1e1e;color:#fff;border-top:1px solid #007acc}.code{flex:1;width:100%;resize:none;border:0;outline:none;padding:16px;background:#1e1e1e;color:#d4d4d4;font:14px/1.55 ui-monospace,monospace;box-sizing:border-box}.preview{border-left:1px solid #333;display:flex;flex-direction:column;background:#111}.preview-bar{height:36px;padding:0 10px;display:flex;align-items:center;justify-content:space-between;background:#252526}.preview-frame{flex:1;width:100%;border:0;background:white}.statusbar{background:#007acc;color:white;padding:3px 10px;font-size:12px}.small{border:0;border-radius:4px;padding:7px 10px;background:#0e639c;color:white;cursor:pointer}.small.secondary{background:#3c3c3c}@media(max-width:900px){.workspace{grid-template-columns:150px 1fr}.preview{display:none}}
+      body{overflow:hidden}.shell{max-width:none;height:100vh;padding:0}.ide{height:100vh;background:#1e1e1e;color:#ddd;display:grid;grid-template-rows:44px 1fr 24px}.topbar{height:44px;padding:0 12px;background:#181818;border-bottom:1px solid #333;display:flex;align-items:center;justify-content:space-between}.workspace{display:grid;grid-template-columns:180px 1fr 48%;min-height:0}.explorer{background:#252526;border-right:1px solid #333;padding:10px}.explorer-title{font-weight:bold;margin-bottom:10px}.file{display:block;width:100%;border:0;background:transparent;color:#ccc;text-align:left;padding:8px;cursor:pointer}.file.active{background:#37373d;color:white}.editor{display:flex;flex-direction:column;min-width:0}.editor-tabbar{height:36px;background:#252526;border-bottom:1px solid #333}.editor-tab{height:36px;border:0;border-right:1px solid #333;border-top:1px solid #007acc;background:#1e1e1e;color:white;padding:0 14px}.code{flex:1;width:100%;resize:none;border:0;outline:none;padding:16px;background:#1e1e1e;color:#d4d4d4;font:14px/1.55 ui-monospace,Menlo,Monaco,monospace;box-sizing:border-box}.preview{border-left:1px solid #333;background:#111;display:flex;flex-direction:column}.preview-bar{height:36px;padding:0 10px;background:#252526;display:flex;align-items:center;justify-content:space-between}.preview-frame{flex:1;width:100%;border:0;background:white}.statusbar{background:#007acc;color:white;font-size:12px;padding:3px 10px}.button.small{border:0;border-radius:4px;padding:7px 10px;color:white;background:#0e639c;cursor:pointer}.button.small.secondary{background:#3c3c3c}@media(max-width:900px){.workspace{grid-template-columns:150px 1fr}.preview{display:none}}
     </style>
     <div class="ide">
-      <div class="titlebar"><div><input id="slug" value="${escapeHtml(slug)}" placeholder="seitenname" style="width:180px;margin-right:8px;padding:6px" ${page ? 'readonly' : ''}><strong>GetVexel Web-Editor</strong></div><div><button class="small secondary" id="save" type="button">Speichern</button> <button class="small" id="publish" type="button">Veröffentlichen</button></div></div>
+      <div class="topbar"><div><input id="slug" value="${escapeHtml(slug)}" placeholder="seitenname" style="width:180px;margin-right:8px;padding:6px" ${page ? 'readonly' : ''}><strong>GetVexel Web-Editor</strong></div><div><button class="button small secondary" id="save" type="button">Speichern</button> <button class="button small" id="publish" type="button">Veröffentlichen</button></div></div>
       <div class="workspace">
-        <aside class="explorer"><strong>EXPLORER</strong><button class="file active" type="button" data-file="html">index.html</button><button class="file" type="button" data-file="css">styles.css</button><button class="file" type="button" data-file="js">script.js</button><button class="file" id="add-product" type="button">+ Produkt</button></aside>
-        <section class="editor-pane"><div class="editor-tabs"><button class="tab" id="active-tab">index.html</button></div><textarea id="code" class="code" spellcheck="false"></textarea></section>
-        <section class="preview"><div class="preview-bar"><strong>Vorschau</strong><button class="small secondary" id="refresh" type="button">Aktualisieren</button></div><iframe id="preview" class="preview-frame" title="Live-Vorschau" sandbox="allow-scripts allow-modals"></iframe></section>
+        <aside class="explorer"><div class="explorer-title">EXPLORER</div><button class="file active" type="button" data-file="html">index.html</button><button class="file" type="button" data-file="css">styles.css</button><button class="file" type="button" data-file="js">script.js</button></aside>
+        <section class="editor"><div class="editor-tabbar"><button class="editor-tab" id="active-tab">index.html</button></div><textarea id="code" class="code" spellcheck="false"></textarea></section>
+        <section class="preview"><div class="preview-bar"><strong>Vorschau</strong><button class="button small secondary" id="refresh" type="button">Aktualisieren</button></div><iframe id="preview" class="preview-frame" title="Live-Vorschau" sandbox="allow-scripts allow-modals"></iframe></section>
       </div>
       <div class="statusbar"><span id="position">Zeile 1, Spalte 1</span></div>
     </div>
     <script>
-      const loaded=${JSON.stringify(project)};
-      const files={html:String(loaded.html||loaded.content||''),css:String(loaded.css||''),js:String(loaded.js||'')};
+      const filesRaw=${projectJson};
+      const files={html:String(filesRaw.html||filesRaw.content||''),css:String(filesRaw.css||''),js:String(filesRaw.js||'')};
       let active='html';
       const code=document.querySelector('#code');
       const preview=document.querySelector('#preview');
       const names={html:'index.html',css:'styles.css',js:'script.js'};
 
       function saveCurrent(){files[active]=code.value}
+      function updateCursor(){const before=code.value.slice(0,code.selectionStart).split('\n');document.querySelector('#position').textContent='Zeile '+before.length+', Spalte '+(before.at(-1).length+1)}
       function switchFile(name){
         saveCurrent();
-        if(!names[name])return;
         active=name;
         code.value=files[name]||'';
         document.querySelector('#active-tab').textContent=names[name];
-        document.querySelectorAll('.file[data-file]').forEach(button=>button.classList.toggle('active',button.dataset.file===name));
+        document.querySelectorAll('.file').forEach(button=>button.classList.toggle('active',button.dataset.file===name));
         updateCursor();
         code.focus();
-        updatePreview();
       }
-      function updateCursor(){const before=code.value.slice(0,code.selectionStart).split('\n');document.querySelector('#position').textContent='Zeile '+before.length+', Spalte '+(before.at(-1).length+1)}
       function updatePreview(){
         saveCurrent();
         const scriptOpen='<scr'+'ipt>';
         const scriptClose='<'+'/scr'+'ipt>';
-        let html;
+        let documentHtml;
         if(files.html.toLowerCase().includes('<html')){
-          html=files.html;
-          if(files.css&&!html.includes('<style>'))html=html.replace('</head>','<style>'+files.css+'</style></head>');
-          if(files.js)html=html.replace('</body>',scriptOpen+files.js+scriptClose+'</body>');
+          documentHtml=files.html;
+          if(files.css)documentHtml=documentHtml.includes('</head>')?documentHtml.replace('</head>','<style>'+files.css+'</style></head>'):documentHtml.replace('<head>','<head><style>'+files.css+'</style>');
+          if(files.js)documentHtml=documentHtml.includes('</body>')?documentHtml.replace('</body>',scriptOpen+files.js+scriptClose+'</body>'):documentHtml+scriptOpen+files.js+scriptClose;
         }else{
-          html='<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>'+files.css+'</style></head><body>'+files.html+(files.js?scriptOpen+files.js+scriptClose:'')+'</body></html>';
+          documentHtml='<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>'+files.css+'</style></head><body>'+files.html+(files.js?scriptOpen+files.js+scriptClose:'')+'</body></html>';
         }
-        preview.srcdoc=html;
+        preview.srcdoc=documentHtml;
       }
 
-      document.querySelectorAll('.file[data-file]').forEach(button=>button.addEventListener('click',()=>switchFile(button.dataset.file)));
+      document.querySelectorAll('.file').forEach(button=>button.addEventListener('click',()=>switchFile(button.dataset.file)));
       code.addEventListener('input',()=>{saveCurrent();updateCursor();updatePreview()});
       code.addEventListener('keyup',updateCursor);
       code.addEventListener('click',updateCursor);
       code.addEventListener('keydown',event=>{if(event.key==='Tab'){event.preventDefault();const start=code.selectionStart,end=code.selectionEnd;code.setRangeText('  ',start,end,'end');saveCurrent();updatePreview()}});
       document.querySelector('#refresh').addEventListener('click',updatePreview);
-
-      document.querySelector('#add-product').addEventListener('click',()=>{
-        if(active!=='html')switchFile('html');
-        const number=(files.html.match(/class="product"/g)||[]).length+1;
-        const product='<article class="product"><div class="product-image"></div><h3>Neues Produkt '+number+'</h3><p class="product-price">29,99 €</p><button class="add-cart">In den Warenkorb</button></article>';
-        if(files.html.includes('</section>'))files.html=files.html.replace('</section>',product+'</section>');
-        else files.html+='<section class="products">'+product+'</section>';
-        code.value=files.html;
-        saveCurrent();updatePreview();
-      });
 
       async function saveProject(){
         saveCurrent();
@@ -234,6 +224,7 @@ function editorPage(page = null) {
       document.querySelector('#publish').addEventListener('click',async()=>{const response=await saveProject();if(response?.ok)window.open('/'+encodeURIComponent(document.querySelector('#slug').value.trim()),'_blank')});
 
       switchFile('html');
+      updatePreview();
     </script>
   `;
   return htmlPage(page ? 'Web-Editor' : 'Neuer Web-Editor', body);
