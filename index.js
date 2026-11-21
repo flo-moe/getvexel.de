@@ -172,6 +172,7 @@ function editorPage(page = null) {
     <script>
       const loadedFiles=${JSON.stringify(project)};
       const files={html:String(loadedFiles.html||loadedFiles.content||''),css:String(loadedFiles.css||''),js:String(loadedFiles.js||'')};
+      if(!files.html&&!files.css&&!files.js){files.html='<h1>Meine neue Seite</h1>';}
       let active='html';
       const code=document.querySelector('#code');
       const preview=document.querySelector('#preview');
@@ -317,7 +318,7 @@ export default {
         const templateName = cleanSlug(path.slice('dashboard/template/'.length));
         const template = pageTemplates[templateName];
         if (!template) return new Response('Vorlage nicht gefunden.', { status: 404 });
-        return new Response(editorPage({ project: template }), { headers: privateHeaders() });
+        return new Response(editorPage({ project: { html: template.html, css: template.css, js: template.js } }), { headers: privateHeaders() });
       }
 
       const slug = cleanSlug(decodeURIComponent(path.slice('dashboard/edit/'.length)));
