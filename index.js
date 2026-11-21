@@ -444,17 +444,14 @@ export default {
         const totalSize = body.project.html.length + body.project.css.length + body.project.js.length;
         if (totalSize > 1000000) return new Response('Projekt ist zu groß.', { status: 413 });
 
+        let reservation;
         try {
-          await env.DB.prepare('INSERT INTO reserved_slugs(slug, owner_sub, status) VALUES(?, ?, ?)').bind(name, user.sub, 'pending').run();
+          reservation = await env.DB.prepare('INSERT INTO reserved_slugs(slug, owner_sub) VALUES(?, ?)').bind(name, user.sub).run();
         } catch (error) {
           if (String(error.message || error).includes('UNIQUE') || String(error.message || error).includes('PRIMARY')) {
-            const existing = await env.DB.prepare('SELECT owner_sub, status FROM reserved_slugs WHERE slug=?').bind(name).first();
-            if (!existing) return new Response('Seitenname konnte nicht geprüft werden.', { status: 409 });
-            if (existing.owner_sub !== user.sub) return new Response('Seitenname bereits vergeben.', { status: 409 });
-            const pageExists = await env.PAGES_KV.get(`meta:${name}`);
-            if (pageExists) return new Response('Seitenname bereits vergeben.', { status: 409 });
-            if (existing.status !== 'pending') return new Response('Seitenname wird geprüft oder ist bereits vergeben.', { status: 409 });
-          } else throw error;
+            return new Response('Seitenname bereits vergeben.', { status: 409 });
+          }
+          throw error;
         }
 
         const html = combineProject(body.project);
@@ -463,11 +460,9 @@ export default {
           await env.PAGES_KV.put(`project:${name}`, JSON.stringify(body.project));
           await env.PAGES_KV.put(`meta:${name}`, JSON.stringify({ owner: user.sub, updatedAt: Date.now() }));
           await env.PAGES_KV.put(`owner:${user.sub}:${name}`, '1');
-          await env.DB.prepare("UPDATE reserved_slugs SET status='complete' WHERE slug=? AND owner_sub=?").bind(name, user.sub).run();
         } catch (error) {
-          await env.DB.prepare("UPDATE reserved_slugs SET status='pending' WHERE slug=? AND owner_sub=?").bind(name, user.sub).run();
-          console.error('Incomplete page creation', name);
-          return new Response('Seite konnte nicht vollständig veröffentlicht werden. Bitte erneut versuchen.', { status: 500 });
+          await env.DB.prepare('DELETE FROM reserved_slugs WHERE slug=? AND owner_sub=?').bind(name, user.sub).run();
+          throw error;
         }
         return new Response('OK');
       }
