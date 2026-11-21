@@ -164,7 +164,7 @@ function editorPage(page = null) {
       <div class="titlebar"><div class="brand"><input id="slug" aria-label="Seitenname" value="${escapeHtml(slug)}" placeholder="seitenname" style="width:180px;margin-right:8px;padding:6px" ${page ? 'readonly' : ''}>GetVexel <span style="color:#888">— Web-Editor</span></div><div class="actions"><button class="small secondary" id="save" type="button">Speichern</button><button class="small" id="publish" type="button">Veröffentlichen</button></div></div>
       <div class="workspace">
         <aside class="explorer"><strong>EXPLORER</strong><button class="file active" type="button" data-file="html" onclick="switchFile('html')">index.html</button><button class="file" type="button" data-file="css" onclick="switchFile('css')">styles.css</button><button class="file" type="button" data-file="js" onclick="switchFile('js')">script.js</button></aside>
-        <section class="editor-pane"><div class="editor-tabs"><button class="tab active" id="active-tab">index.html</button></div><textarea id="code" class="code" spellcheck="false"></textarea></section>
+        <section class="editor-pane"><div class="editor-tabs"><button class="tab active" id="active-tab">index.html</button></div><textarea id="code" class="code" spellcheck="false">${escapeHtml(project.html || '')}</textarea></section>
         <section class="preview"><div class="preview-bar"><strong>Vorschau</strong><button class="small secondary" id="refresh" type="button">Aktualisieren</button></div><iframe id="preview" class="preview-frame" title="Live-Vorschau" sandbox="allow-scripts allow-modals"></iframe></section>
       </div>
       <div class="statusbar"><span id="position">Zeile 1, Spalte 1</span>&nbsp;&nbsp; HTML/CSS/JavaScript</div>
