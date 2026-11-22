@@ -187,7 +187,7 @@ function editorPage(page = null) {
       <div class="status"><span id="position">Zeile 1, Spalte 1</span></div>
     </div>
     <script>window.__GETVEXEL_PROJECT__=${projectJson};window.__GETVEXEL_EDIT__=${page ? 'true' : 'false'};</script>
-    <script src="/editor.js" defer></script>
+    <script src="/editor.js?v=20261122" defer></script>
   `);
 }
 
@@ -297,7 +297,7 @@ export default {
           async function saveProject() {
             saveCurrent();
             const slugInput = document.querySelector('#slug');
-            const name = slugInput ? slugInput.value.trim() : '';
+            const name = slugInput ? slugInput.value.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-_]/g, '') : '';
             if (!name) { alert('Seitennamen eingeben'); return null; }
             const response = await fetch(window.__GETVEXEL_EDIT__ ? '/api/pages/' + encodeURIComponent(name) : '/api/pages', {
               method: window.__GETVEXEL_EDIT__ ? 'PUT' : 'POST',
@@ -548,13 +548,12 @@ export default {
             if (!existing) return new Response('Seitenname konnte nicht geprüft werden.', { status: 409 });
             if (existing.owner_sub !== user.sub) return new Response('Seitenname bereits vergeben.', { status: 409 });
             const meta = await env.PAGES_KV.get(`meta:${name}`);
-            if (existing.status === 'complete' || meta) return new Response('Seitenname bereits vergeben.', { status: 409 });
-            if (existing.status === 'pending') {
-              await env.PAGES_KV.delete(`page:${name}`);
-              await env.PAGES_KV.delete(`project:${name}`);
-              await env.PAGES_KV.delete(`meta:${name}`);
-              await env.PAGES_KV.delete(`owner:${user.sub}:${name}`);
-            }
+            if (meta && existing.status === 'complete') return new Response('Seitenname bereits vergeben.', { status: 409 });
+            await env.PAGES_KV.delete(`page:${name}`);
+            await env.PAGES_KV.delete(`project:${name}`);
+            await env.PAGES_KV.delete(`meta:${name}`);
+            await env.PAGES_KV.delete(`owner:${user.sub}:${name}`);
+            await env.DB.prepare("UPDATE reserved_slugs SET status='pending' WHERE slug=? AND owner_sub=?").bind(name, user.sub).run();
           } else throw error;
         }
 
