@@ -1,4 +1,3 @@
-
 const SESSION_COOKIE = '__Host-getvexel-session';
 const STATE_COOKIE = '__Host-getvexel-oauth-state';
 
@@ -387,7 +386,6 @@ function combineProject(project) {
   const css = String(project.css || '')
     .replace(/<\/?style[^>]*>/gi, '');
 
-  // Verhindert, dass ein </script> im JavaScript den HTML-Block beendet.
   const js = String(project.js || '')
     .replace(/<\/script/gi, '<\\/script');
 
@@ -525,60 +523,11 @@ async function removePage(slug) {
   );
 }
 
-const TEMPLATES = {
-  blank: {
-    name: 'Leere Seite',
-    html: '<h1>Meine neue Seite</h1>\n<p>Hier beginnt dein Inhalt.</p>',
-    css: '',
-    js: ''
-  },
-
-  landing: {
-    name: 'Landingpage',
-    html: '<header><strong>Meine Marke</strong></header><main><h1>Dein Angebot</h1><p>Überzeuge deine Besucher.</p><button>Jetzt starten</button></main>',
-    css: 'body{margin:0;font-family:system-ui,sans-serif}header{padding:24px 8%}main{padding:100px 8%;text-align:center;background:#eef4ff}button{padding:14px 24px;border:0;border-radius:8px;background:#2563eb;color:white}',
-    js: ''
-  },
-
-  shop: {
-    name: 'Online-Shop',
-    html: '<nav class="shop-nav"><strong>Mein Shop</strong><button id="cart-open">Warenkorb (<span id="cart-count">0</span>)</button></nav><main class="shop-main"><h1>Unsere Produkte</h1><section class="products"><article class="product"><div class="product-image"></div><h3>Produkt 1</h3><p class="product-price">29,99 €</p><button class="add-cart">In den Warenkorb</button></article><article class="product"><div class="product-image"></div><h3>Produkt 2</h3><p class="product-price">39,99 €</p><button class="add-cart">In den Warenkorb</button></article></section></main><aside id="cart-panel"><button id="cart-close">Schließen</button><div id="cart-items"></div><strong id="cart-total">0,00 €</strong></aside>',
-    css: 'body{margin:0;font-family:system-ui,sans-serif}.shop-nav{height:68px;padding:0 8%;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #ddd}.shop-main{padding:50px 8%}.products{display:grid;grid-template-columns:repeat(2,1fr);gap:20px}.product{border:1px solid #ddd;border-radius:10px;padding:20px}.product-image{height:180px;background:#dbeafe}.add-cart,#cart-open,#cart-close{border:0;border-radius:6px;background:#111;color:white;padding:10px 14px;cursor:pointer}#cart-panel{position:fixed;top:0;right:0;width:360px;height:100%;background:white;transform:translateX(100%);padding:20px;box-sizing:border-box}#cart-panel.open{transform:none}',
-    js: 'const cart=[];document.querySelector("#cart-open").onclick=()=>document.querySelector("#cart-panel").classList.add("open");document.querySelector("#cart-close").onclick=()=>document.querySelector("#cart-panel").classList.remove("open");document.querySelectorAll(".add-cart").forEach(button=>button.onclick=()=>{const product=button.closest(".product");cart.push({name:product.querySelector("h3").textContent,price:product.querySelector(".product-price").textContent});document.querySelector("#cart-count").textContent=cart.length;document.querySelector("#cart-items").innerHTML=cart.map(item=>"<p>"+item.name+" — "+item.price+"</p>").join("")})'
-  },
-
-  portfolio: {
-    name: 'Portfolio',
-    html: '<main><p>FOTO · DESIGN · PROJEKTE</p><h1>Meine Arbeiten</h1><section id="projekte"><h2>Ausgewählte Projekte</h2></section></main>',
-    css: 'body{margin:0;background:#111;color:white;font-family:system-ui,sans-serif}main{padding:80px 10%}h1{font-size:64px}',
-    js: ''
-  },
-
-  blog: {
-    name: 'Blog',
-    html: '<header><strong>Mein Blog</strong></header><main><p>Neue Kategorie</p><h1>Mein erster Artikel</h1><p>Ein kurzer Einleitungstext.</p></main>',
-    css: 'body{margin:0;font-family:Georgia,serif}header{padding:30px 8%;border-bottom:1px solid #ddd}main{max-width:800px;margin:auto;padding:60px 20px}',
-    js: ''
-  }
-};
-
-function templatesPage() {
-  const cards = Object.entries(TEMPLATES).map(([key, item]) => `
-<article class="card">
-<h2>${escapeHtml(item.name)}</h2>
-<a class="button" href="/dashboard/template/${key}">Vorlage verwenden</a>
-</article>`).join('');
-
-  return shell(
-    'Vorlagen',
-    `
-<div class="top">
-<div class="brand">GetVexel Vorlagen</div>
-<a class="button secondary" href="/dashboard">Zur Übersicht</a>
-</div>
-<div class="grid">${cards}</div>`
-  );
-}
+/*
+ * EDITOR
+ * Neue Projekte beginnen immer mit leerem HTML, CSS und JavaScript.
+ * Es gibt keine Vorlagen mehr.
+ */
 
 function editorPage(page = null) {
   const slug = page?.slug || '';
@@ -586,7 +535,7 @@ function editorPage(page = null) {
   const project = page?.project
     ? normalizeProject(page.project)
     : {
-        html: page?.html || '<h1>Meine neue Seite</h1>\n<p>Hallo Welt!</p>',
+        html: page?.html || '',
         css: '',
         js: ''
       };
@@ -677,7 +626,7 @@ window.__GETVEXEL_PROJECT__=${projectJson};
 window.__GETVEXEL_EDIT__=${isExistingPage ? 'true' : 'false'};
 </script>
 
-<script src="/editor.js?v=20261122-3" defer></script>
+<script src="/editor.js?v=20261122-4" defer></script>
 `
   );
 }
@@ -1038,9 +987,7 @@ export default {
               });
             }
 
-            // VERÖFFENTLICHEN
-            // Das neue Fenster wird synchron beim Klick geöffnet.
-            // Safari blockiert dadurch das Fenster nicht wegen eines await.
+            // Veröffentlichen: Fenster synchron beim Klick öffnen.
 
             const publish = document.querySelector('#publish');
 
@@ -1060,32 +1007,23 @@ export default {
                   return;
                 }
 
-                // Wichtig: window.open muss vor dem ersten await passieren.
                 const newWindow = window.open('about:blank', '_blank');
 
                 if (newWindow) {
                   newWindow.document.open();
                   newWindow.document.write(
-                    '<!doctype html>' +
-                    '<html lang="de">' +
-                    '<head>' +
+                    '<!doctype html><html lang="de"><head>' +
                     '<meta charset="utf-8">' +
                     '<meta name="viewport" content="width=device-width,initial-scale=1">' +
                     '<title>GetVexel – Veröffentlichung</title>' +
                     '<style>' +
                     'body{margin:0;min-height:100vh;display:grid;place-items:center;' +
                     'background:#0b1220;color:white;font-family:system-ui,sans-serif}' +
-                    'main{text-align:center;padding:24px}' +
-                    'p{color:#94a3b8}' +
-                    '</style>' +
-                    '</head>' +
-                    '<body>' +
-                    '<main>' +
+                    'main{text-align:center;padding:24px}p{color:#94a3b8}' +
+                    '</style></head><body><main>' +
                     '<h2>Deine Seite wird veröffentlicht ...</h2>' +
                     '<p>Bitte einen Moment warten.</p>' +
-                    '</main>' +
-                    '</body>' +
-                    '</html>'
+                    '</main></body></html>'
                   );
                   newWindow.document.close();
                 }
@@ -1103,10 +1041,8 @@ export default {
                       location.origin + pageUrl
                     );
                   }
-                } else {
-                  if (newWindow && !newWindow.closed) {
-                    newWindow.close();
-                  }
+                } else if (newWindow && !newWindow.closed) {
+                  newWindow.close();
                 }
               });
             }
@@ -1377,29 +1313,16 @@ export default {
           );
         }
 
+        // NEUES PROJEKT: DIREKT EIN LEERER EDITOR
+
         if (path === 'dashboard/new') {
           return new Response(
-            templatesPage(),
+            editorPage(),
             { headers: privateHeaders() }
           );
         }
 
-        if (path.startsWith('dashboard/template/')) {
-          const name = cleanSlug(
-            path.slice('dashboard/template/'.length)
-          );
-
-          const template = TEMPLATES[name];
-
-          if (!template) {
-            return textResponse('Vorlage nicht gefunden.', 404);
-          }
-
-          return new Response(
-            editorPage({ project: template }),
-            { headers: privateHeaders() }
-          );
-        }
+        // BESTEHENDE SEITE BEARBEITEN
 
         if (path.startsWith('dashboard/edit/')) {
           const slug = cleanSlug(
