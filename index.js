@@ -184,69 +184,8 @@ function editorPage(page = null) {
       </div>
       <div class="status"><span id="position">Zeile 1, Spalte 1</span></div>
     </div>
-    <script>
-      const initial=${projectJson};
-      const files={html:String(initial.html||''),css:String(initial.css||''),js:String(initial.js||'')};
-      let active='html';
-      const code=document.querySelector('#code');
-      const preview=document.querySelector('#preview');
-      const names={html:'index.html',css:'styles.css',js:'script.js'};
-
-      function saveCurrent(){files[active]=code.value}
-
-      function updatePreview(){
-        saveCurrent();
-        const scriptOpen='<scr'+'ipt>';
-        const scriptClose='<'+'/scr'+'ipt>';
-        let documentHtml;
-        if(files.html.toLowerCase().includes('<html')){
-          documentHtml=files.html;
-          if(files.css) documentHtml=documentHtml.includes('</head>')?documentHtml.replace('</head>','<style>'+files.css+'</style></head>'):documentHtml+'<style>'+files.css+'</style>';
-          if(files.js) documentHtml=documentHtml.includes('</body>')?documentHtml.replace('</body>',scriptOpen+files.js+scriptClose+'</body>'):documentHtml+scriptOpen+files.js+scriptClose;
-        }else{
-          documentHtml='<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>'+files.css+'</style></head><body>'+files.html+(files.js?scriptOpen+files.js+scriptClose:'')+'</body></html>';
-        }
-        preview.srcdoc=documentHtml;
-      }
-
-      function openFile(name){
-        saveCurrent();
-        active=name;
-        code.value=files[name]||'';
-        document.querySelector('#tabname').textContent=names[name];
-        document.querySelectorAll('.file').forEach(button=>button.classList.toggle('active',button.dataset.file===name));
-        updateCursor();
-        code.focus();
-        updatePreview();
-      }
-
-      function updateCursor(){
-        const before=code.value.slice(0,code.selectionStart).split('\n');
-        document.querySelector('#position').textContent='Zeile '+before.length+', Spalte '+(before.at(-1).length+1);
-      }
-
-      document.querySelectorAll('.file').forEach(button=>button.addEventListener('click',()=>openFile(button.dataset.file)));
-      code.addEventListener('input',()=>{saveCurrent();updateCursor();updatePreview()});
-      code.addEventListener('keyup',updateCursor);
-      code.addEventListener('click',updateCursor);
-      code.addEventListener('keydown',event=>{if(event.key==='Tab'){event.preventDefault();const start=code.selectionStart,end=code.selectionEnd;code.setRangeText('  ',start,end,'end');saveCurrent();updatePreview()}});
-      document.querySelector('#refresh').addEventListener('click',updatePreview);
-
-      async function saveProject(){
-        saveCurrent();
-        const name=document.querySelector('#slug').value.trim();
-        if(!name){alert('Seitennamen eingeben');return null}
-        const isEdit=${page ? 'true' : 'false'};
-        const response=await fetch(isEdit?'/api/pages/'+encodeURIComponent(name):'/api/pages',{method:isEdit?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slug:name,html:files.html,project:files})});
-        if(!response.ok)alert(await response.text());
-        return response;
-      }
-
-      document.querySelector('#save').addEventListener('click',async()=>{const response=await saveProject();if(response?.ok)alert('Gespeichert')});
-      document.querySelector('#publish').addEventListener('click',async()=>{const response=await saveProject();if(response?.ok)window.open('/'+encodeURIComponent(document.querySelector('#slug').value.trim()),'_blank')});
-
-      openFile('html');
-    </script>
+    <script>window.__GETVEXEL_PROJECT__=${projectJson};window.__GETVEXEL_EDIT__=${page ? 'true' : 'false'};</script>
+    <script src="/editor.js" defer></script>
   `);
 }
 
@@ -269,6 +208,116 @@ export default {
     try { path = decodeURIComponent(url.pathname).replace(/^\/+|\/+$/g, ''); } catch { return new Response('Ungültiger Pfad', { status: 400 }); }
 
     if (!env.PAGES_KV) return new Response('PAGES_KV fehlt.', { status: 500 });
+
+    if (path === 'editor.js' && request.method === 'GET') {
+      const script = `(() => {
+        const boot = () => {
+          const code = document.querySelector('#code');
+          const preview = document.querySelector('#preview');
+          if (!code || !preview) return;
+
+          const project = window.__GETVEXEL_PROJECT__ || { html: '', css: '', js: '' };
+          const files = {
+            html: String(project.html || ''),
+            css: String(project.css || ''),
+            js: String(project.js || '')
+          };
+          const names = { html: 'index.html', css: 'styles.css', js: 'script.js' };
+          let active = 'html';
+
+          function saveCurrent() { files[active] = code.value; }
+
+          function updateCursor() {
+            const before = code.value.slice(0, code.selectionStart).split('\\n');
+            const position = document.querySelector('#position');
+            if (position) position.textContent = 'Zeile ' + before.length + ', Spalte ' + (before[before.length - 1].length + 1);
+          }
+
+          function updatePreview() {
+            saveCurrent();
+            let html;
+            if (files.html.toLowerCase().includes('<html')) {
+              html = files.html;
+              if (files.css) {
+                html = html.includes('</head>')
+                  ? html.replace('</head>', '<style>' + files.css + '</style></head>')
+                  : html + '<style>' + files.css + '</style>';
+              }
+              if (files.js) {
+                const scriptOpen = '<scr' + 'ipt>';
+                const scriptClose = '</scr' + 'ipt>';
+                html = html.includes('</body>')
+                  ? html.replace('</body>', scriptOpen + files.js + scriptClose + '</body>')
+                  : html + scriptOpen + files.js + scriptClose;
+              }
+            } else {
+              const scriptOpen = '<scr' + 'ipt>';
+              const scriptClose = '</scr' + 'ipt>';
+              html = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>' + files.css + '</style></head><body>' + files.html + (files.js ? scriptOpen + files.js + scriptClose : '') + '</body></html>';
+            }
+            preview.srcdoc = html;
+          }
+
+          function openFile(name) {
+            saveCurrent();
+            active = name;
+            code.value = files[name] || '';
+            const tab = document.querySelector('#tabname');
+            if (tab) tab.textContent = names[name];
+            document.querySelectorAll('.file').forEach(function(button) {
+              button.classList.toggle('active', button.dataset.file === name);
+            });
+            updateCursor();
+            code.focus();
+            updatePreview();
+          }
+
+          document.querySelectorAll('.file').forEach(function(button) {
+            button.addEventListener('click', function() { openFile(button.dataset.file); });
+          });
+
+          code.addEventListener('input', function() { saveCurrent(); updateCursor(); updatePreview(); });
+          code.addEventListener('keyup', updateCursor);
+          code.addEventListener('click', updateCursor);
+          code.addEventListener('keydown', function(event) {
+            if (event.key !== 'Tab') return;
+            event.preventDefault();
+            const start = code.selectionStart;
+            const end = code.selectionEnd;
+            code.setRangeText('  ', start, end, 'end');
+            saveCurrent();
+            updatePreview();
+          });
+
+          const refresh = document.querySelector('#refresh');
+          if (refresh) refresh.addEventListener('click', updatePreview);
+
+          async function saveProject() {
+            saveCurrent();
+            const slugInput = document.querySelector('#slug');
+            const name = slugInput ? slugInput.value.trim() : '';
+            if (!name) { alert('Seitennamen eingeben'); return null; }
+            const response = await fetch(window.__GETVEXEL_EDIT__ ? '/api/pages/' + encodeURIComponent(name) : '/api/pages', {
+              method: window.__GETVEXEL_EDIT__ ? 'PUT' : 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ slug: name, html: files.html, project: files })
+            });
+            if (!response.ok) alert(await response.text());
+            return response;
+          }
+
+          const save = document.querySelector('#save');
+          if (save) save.addEventListener('click', async function() { const response = await saveProject(); if (response && response.ok) alert('Gespeichert'); });
+
+          const publish = document.querySelector('#publish');
+          if (publish) publish.addEventListener('click', async function() { const response = await saveProject(); if (response && response.ok) window.open('/' + encodeURIComponent(document.querySelector('#slug').value.trim()), '_blank'); });
+
+          openFile('html');
+        };
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+      })();`;
+      return new Response(script, { headers: { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store, no-cache, must-revalidate' } });
+    }
     if (!assertSameOrigin(request, url)) return new Response('Cross-Origin-Anfrage nicht erlaubt.', { status: 403 });
 
     if (path === 'auth/google' && request.method === 'GET') {
