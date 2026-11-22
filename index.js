@@ -176,7 +176,7 @@ function editorPage(page = null) {
     </style>
     <div class="ide">
       <div class="bar">
-        <div><input id="slug" value="${escapeHtml(slug)}" placeholder="seitenname" style="width:180px;margin-right:8px;padding:6px" ${page ? 'readonly' : ''}><strong>GetVexel Web-Editor</strong></div>
+        <div><input id="slug" value="${escapeHtml(slug)}" placeholder="seitenname" style="width:220px;margin-right:8px;padding:8px;color:#111;background:#fff" ${page?.slug ? 'readonly' : ''}><strong>GetVexel Web-Editor</strong></div>
         <div><button class="small secondary" id="save" type="button">Speichern</button> <button class="small" id="publish" type="button">Veröffentlichen</button></div>
       </div>
       <div class="workspace">
