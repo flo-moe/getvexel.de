@@ -65,6 +65,8 @@ async function verifyGoogleIdToken(idToken, clientId, nonce) {
   if (payload.exp * 1000 <= Date.now()) throw new Error('Token abgelaufen');
   if (nonce && payload.nonce !== nonce) throw new Error('Ungültige OAuth-Nonce');
   if (payload.email_verified !== true) throw new Error('Google-E-Mail ist nicht verifiziert');
+  if (payload.iat && payload.iat * 1000 > Date.now() + 300000) throw new Error('Ungültiges Token-Ausstellungsdatum');
+  if (payload.azp && payload.azp !== clientId) throw new Error('Ungültiger autorisierter Client');
 
   const jwksResponse = await fetch('https://www.googleapis.com/oauth2/v3/certs');
   if (!jwksResponse.ok) throw new Error('Google-Schlüssel konnten nicht geladen werden');
@@ -439,6 +441,8 @@ export default {
       const id = cleanSlug(path.startsWith('api/databases/') ? path.slice('api/databases/'.length) : '');
 
       if (request.method === 'POST' && path === 'api/databases') {
+        const requestLength = Number(request.headers.get('Content-Length') || 0);
+        if (requestLength > 65536) return new Response('Anfrage ist zu groß.', { status: 413 });
         let body; try { body = await request.json(); } catch { return new Response('Ungültige Daten.', { status: 400 }); }
         if (!body || typeof body !== 'object' || Array.isArray(body)) return new Response('Ungültige Daten.', { status: 400 });
         const name = String(body.name || '').trim().slice(0, 40);
@@ -458,6 +462,8 @@ export default {
       if (request.method === 'POST' && id) {
         const owned = await env.DB.prepare('SELECT id FROM user_databases WHERE id=? AND owner_sub=?').bind(id, user.sub).first();
         if (!owned) return new Response('Datenbank nicht gefunden.', { status: 404 });
+        const requestLength = Number(request.headers.get('Content-Length') || 0);
+        if (requestLength > 65536) return new Response('Anfrage ist zu groß.', { status: 413 });
         let body; try { body = await request.json(); } catch { return new Response('Ungültige Daten.', { status: 400 }); }
         if (!body || typeof body !== 'object' || Array.isArray(body)) return new Response('Ungültige Daten.', { status: 400 });
         await monthlyCredits(env, user.sub);
@@ -533,14 +539,23 @@ export default {
         const totalSize = body.project.html.length + body.project.css.length + body.project.js.length;
         if (totalSize > 1000000) return new Response('Projekt ist zu groß.', { status: 413 });
 
-        let reservation;
+        if (!env.DB) return new Response('D1 ist nicht konfiguriert.', { status: 500 });
         try {
-          reservation = await env.DB.prepare('INSERT INTO reserved_slugs(slug, owner_sub) VALUES(?, ?)').bind(name, user.sub).run();
+          await env.DB.prepare('INSERT INTO reserved_slugs(slug, owner_sub, status) VALUES(?, ?, ?)').bind(name, user.sub, 'pending').run();
         } catch (error) {
           if (String(error.message || error).includes('UNIQUE') || String(error.message || error).includes('PRIMARY')) {
-            return new Response('Seitenname bereits vergeben.', { status: 409 });
-          }
-          throw error;
+            const existing = await env.DB.prepare('SELECT owner_sub, status FROM reserved_slugs WHERE slug=?').bind(name).first();
+            if (!existing) return new Response('Seitenname konnte nicht geprüft werden.', { status: 409 });
+            if (existing.owner_sub !== user.sub) return new Response('Seitenname bereits vergeben.', { status: 409 });
+            const meta = await env.PAGES_KV.get(`meta:${name}`);
+            if (existing.status === 'complete' || meta) return new Response('Seitenname bereits vergeben.', { status: 409 });
+            if (existing.status === 'pending') {
+              await env.PAGES_KV.delete(`page:${name}`);
+              await env.PAGES_KV.delete(`project:${name}`);
+              await env.PAGES_KV.delete(`meta:${name}`);
+              await env.PAGES_KV.delete(`owner:${user.sub}:${name}`);
+            }
+          } else throw error;
         }
 
         const html = combineProject(body.project);
@@ -549,14 +564,17 @@ export default {
           await env.PAGES_KV.put(`project:${name}`, JSON.stringify(body.project));
           await env.PAGES_KV.put(`meta:${name}`, JSON.stringify({ owner: user.sub, updatedAt: Date.now() }));
           await env.PAGES_KV.put(`owner:${user.sub}:${name}`, '1');
+          await env.DB.prepare("UPDATE reserved_slugs SET status='complete' WHERE slug=? AND owner_sub=?").bind(name, user.sub).run();
         } catch (error) {
-          await env.DB.prepare('DELETE FROM reserved_slugs WHERE slug=? AND owner_sub=?').bind(name, user.sub).run();
-          throw error;
+          await env.DB.prepare("UPDATE reserved_slugs SET status='failed' WHERE slug=? AND owner_sub=?").bind(name, user.sub).run();
+          console.error('Incomplete page creation', name);
+          return new Response('Seite konnte nicht vollständig veröffentlicht werden.', { status: 500 });
         }
         return new Response('OK');
       }
 
       if (request.method === 'PUT' && slug) {
+        if (!env.DB) return new Response('D1 ist nicht konfiguriert.', { status: 500 });
         const meta = await env.PAGES_KV.get(`meta:${slug}`, 'json');
         if (!meta) return new Response('Seite nicht gefunden.', { status: 404 });
         if (meta.owner !== user.sub) return new Response('Nicht erlaubt.', { status: 403 });
