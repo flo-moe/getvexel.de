@@ -6,6 +6,8 @@ const MAX_PROJECT_SIZE = 1000000;
 const MAX_REQUEST_SIZE = 1200000;
 const MAX_IMAGE_SIZE = 2097152;
 
+const SESSION_DURATION = 7 * 24 * 60 * 60 * 1000;
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, ch => ({
     '&': '&amp;',
@@ -169,7 +171,7 @@ async function verifyGoogleIdToken(idToken, clientId, nonce) {
     throw new Error('Token abgelaufen');
   }
 
-  if (nonce && payload.nonce !== nonce) {
+  if (!nonce || payload.nonce !== nonce) {
     throw new Error('Ungültige OAuth-Nonce');
   }
 
@@ -381,15 +383,13 @@ function normalizeProject(project) {
 
 function combineProject(project) {
   const html = String(project.html || '');
-  const css = String(project.css || '').replace(
-    /<\/?style[^>]*>/gi,
-    ''
-  );
 
-  const js = String(project.js || '').replace(
-    /<\/?script[^>]*>/gi,
-    ''
-  );
+  const css = String(project.css || '')
+    .replace(/<\/?style[^>]*>/gi, '');
+
+  // Verhindert, dass ein </script> im JavaScript den HTML-Block beendet.
+  const js = String(project.js || '')
+    .replace(/<\/script/gi, '<\\/script');
 
   if (/<html[\s>]/i.test(html)) {
     let output = html;
@@ -414,10 +414,10 @@ function combineProject(project) {
       if (/<\/body>/i.test(output)) {
         output = output.replace(
           /<\/body>/i,
-          `<script>${js}<\/script></body>`
+          `<script>${js}</script></body>`
         );
       } else {
-        output += `<script>${js}<\/script>`;
+        output += `<script>${js}</script>`;
       }
     }
 
@@ -433,7 +433,7 @@ function combineProject(project) {
 </head>
 <body>
 ${html}
-<script>${js}<\/script>
+<script>${js}</script>
 </body>
 </html>`;
 }
@@ -458,6 +458,7 @@ body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#0b1220;
 input,textarea{width:100%;padding:12px;border-radius:8px;border:1px solid #334a70;background:#0b1425;color:white;font:inherit}
 .actions{display:flex;gap:8px;flex-wrap:wrap}
 button,.button{display:inline-block;border:0;border-radius:8px;padding:11px 16px;background:#3b82f6;color:white;font-weight:700;text-decoration:none;cursor:pointer}
+button:disabled{opacity:.55;cursor:not-allowed}
 .secondary{background:#263652}
 .danger{background:#b42318}
 .muted{color:#94a3b8;font-size:14px}
@@ -676,7 +677,7 @@ window.__GETVEXEL_PROJECT__=${projectJson};
 window.__GETVEXEL_EDIT__=${isExistingPage ? 'true' : 'false'};
 </script>
 
-<script src="/editor.js?v=20261122-2" defer></script>
+<script src="/editor.js?v=20261122-3" defer></script>
 `
   );
 }
@@ -752,6 +753,26 @@ function validateProjectBody(body) {
   return project;
 }
 
+function jsonResponse(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store'
+    }
+  });
+}
+
+function textResponse(message, status = 200) {
+  return new Response(message, {
+    status,
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Cache-Control': 'no-store'
+    }
+  });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -762,636 +783,674 @@ export default {
       path = decodeURIComponent(url.pathname)
         .replace(/^\/+|\/+$/g, '');
     } catch {
-      return new Response('Ungültiger Pfad', { status: 400 });
+      return textResponse('Ungültiger Pfad.', 400);
     }
 
     if (!env.PAGES_KV) {
-      return new Response('PAGES_KV fehlt.', { status: 500 });
+      return textResponse('PAGES_KV fehlt.', 500);
     }
 
     if (!assertSameOrigin(request, url)) {
-      return new Response(
+      return textResponse(
         'Cross-Origin-Anfrage nicht erlaubt.',
-        { status: 403 }
+        403
       );
     }
 
-    // EDITOR JAVASCRIPT
+    try {
+      // EDITOR JAVASCRIPT
 
-    if (path === 'editor.js' && request.method === 'GET') {
-      const script = `(() => {
-        const boot = () => {
-          const code = document.querySelector('#code');
-          const preview = document.querySelector('#preview');
+      if (path === 'editor.js' && request.method === 'GET') {
+        const script = `(() => {
+          const boot = () => {
+            const code = document.querySelector('#code');
+            const preview = document.querySelector('#preview');
 
-          if (!code || !preview) return;
+            if (!code || !preview) return;
 
-          const project = window.__GETVEXEL_PROJECT__ || {
-            html: '',
-            css: '',
-            js: ''
-          };
+            const project = window.__GETVEXEL_PROJECT__ || {
+              html: '',
+              css: '',
+              js: ''
+            };
 
-          const files = {
-            html: String(project.html || ''),
-            css: String(project.css || ''),
-            js: String(project.js || '')
-          };
+            const files = {
+              html: String(project.html || ''),
+              css: String(project.css || ''),
+              js: String(project.js || '')
+            };
 
-          const names = {
-            html: 'index.html',
-            css: 'styles.css',
-            js: 'script.js'
-          };
+            const names = {
+              html: 'index.html',
+              css: 'styles.css',
+              js: 'script.js'
+            };
 
-          let active = 'html';
-          let isExisting = Boolean(window.__GETVEXEL_EDIT__);
-          let saving = false;
+            let active = 'html';
+            let isExisting = Boolean(window.__GETVEXEL_EDIT__);
+            let saving = false;
 
-          function saveCurrent() {
-            files[active] = code.value;
-          }
-
-          function updateCursor() {
-            const before = code.value
-              .slice(0, code.selectionStart)
-              .split('\\n');
-
-            const position = document.querySelector('#position');
-
-            if (position) {
-              position.textContent =
-                'Zeile ' + before.length +
-                ', Spalte ' + (before[before.length - 1].length + 1);
+            function saveCurrent() {
+              files[active] = code.value;
             }
-          }
 
-          function updatePreview() {
-            saveCurrent();
+            function updateCursor() {
+              const before = code.value
+                .slice(0, code.selectionStart)
+                .split('\\n');
 
-            let html;
+              const position = document.querySelector('#position');
 
-            if (/<html[\\s>]/i.test(files.html)) {
-              html = files.html;
-
-              if (files.css) {
-                if (/<\\/head>/i.test(html)) {
-                  html = html.replace(
-                    /<\\/head>/i,
-                    '<style>' + files.css + '</style></head>'
-                  );
-                } else {
-                  html += '<style>' + files.css + '</style>';
-                }
+              if (position) {
+                position.textContent =
+                  'Zeile ' + before.length +
+                  ', Spalte ' + (before[before.length - 1].length + 1);
               }
+            }
 
-              if (files.js) {
+            function updatePreview() {
+              saveCurrent();
+
+              let html;
+
+              if (/<html[\\s>]/i.test(files.html)) {
+                html = files.html;
+
+                if (files.css) {
+                  if (/<\\/head>/i.test(html)) {
+                    html = html.replace(
+                      /<\\/head>/i,
+                      '<style>' + files.css + '</style></head>'
+                    );
+                  } else {
+                    html += '<style>' + files.css + '</style>';
+                  }
+                }
+
+                if (files.js) {
+                  const scriptOpen = '<scr' + 'ipt>';
+                  const scriptClose = '</scr' + 'ipt>';
+
+                  if (/<\\/body>/i.test(html)) {
+                    html = html.replace(
+                      /<\\/body>/i,
+                      scriptOpen + files.js + scriptClose + '</body>'
+                    );
+                  } else {
+                    html += scriptOpen + files.js + scriptClose;
+                  }
+                }
+              } else {
                 const scriptOpen = '<scr' + 'ipt>';
                 const scriptClose = '</scr' + 'ipt>';
 
-                if (/<\\/body>/i.test(html)) {
-                  html = html.replace(
-                    /<\\/body>/i,
-                    scriptOpen + files.js + scriptClose + '</body>'
-                  );
-                } else {
-                  html += scriptOpen + files.js + scriptClose;
-                }
+                html =
+                  '<!doctype html><html><head>' +
+                  '<meta charset="utf-8">' +
+                  '<meta name="viewport" content="width=device-width">' +
+                  '<style>' + files.css + '</style>' +
+                  '</head><body>' +
+                  files.html +
+                  (files.js ? scriptOpen + files.js + scriptClose : '') +
+                  '</body></html>';
               }
-            } else {
-              const scriptOpen = '<scr' + 'ipt>';
-              const scriptClose = '</scr' + 'ipt>';
 
-              html =
-                '<!doctype html><html><head>' +
-                '<meta charset="utf-8">' +
-                '<meta name="viewport" content="width=device-width">' +
-                '<style>' + files.css + '</style>' +
-                '</head><body>' +
-                files.html +
-                (files.js ? scriptOpen + files.js + scriptClose : '') +
-                '</body></html>';
+              preview.srcdoc = html;
             }
 
-            preview.srcdoc = html;
-          }
+            function openFile(name) {
+              saveCurrent();
 
-          function openFile(name) {
-            saveCurrent();
+              active = name;
+              code.value = files[name] || '';
 
-            active = name;
-            code.value = files[name] || '';
+              const tab = document.querySelector('#tabname');
 
-            const tab = document.querySelector('#tabname');
+              if (tab) tab.textContent = names[name];
 
-            if (tab) tab.textContent = names[name];
+              document.querySelectorAll('.file').forEach(button => {
+                button.classList.toggle(
+                  'active',
+                  button.dataset.file === name
+                );
+              });
+
+              updateCursor();
+              code.focus();
+              updatePreview();
+            }
 
             document.querySelectorAll('.file').forEach(button => {
-              button.classList.toggle(
-                'active',
-                button.dataset.file === name
-              );
+              button.addEventListener('click', () => {
+                openFile(button.dataset.file);
+              });
             });
 
-            updateCursor();
-            code.focus();
-            updatePreview();
-          }
-
-          document.querySelectorAll('.file').forEach(button => {
-            button.addEventListener('click', () => {
-              openFile(button.dataset.file);
+            code.addEventListener('input', () => {
+              saveCurrent();
+              updateCursor();
+              updatePreview();
             });
-          });
 
-          code.addEventListener('input', () => {
-            saveCurrent();
-            updateCursor();
-            updatePreview();
-          });
+            code.addEventListener('keyup', updateCursor);
+            code.addEventListener('click', updateCursor);
 
-          code.addEventListener('keyup', updateCursor);
-          code.addEventListener('click', updateCursor);
+            code.addEventListener('keydown', event => {
+              if (event.key !== 'Tab') return;
 
-          code.addEventListener('keydown', event => {
-            if (event.key !== 'Tab') return;
+              event.preventDefault();
 
-            event.preventDefault();
+              const start = code.selectionStart;
+              const end = code.selectionEnd;
 
-            const start = code.selectionStart;
-            const end = code.selectionEnd;
+              code.setRangeText('  ', start, end, 'end');
 
-            code.setRangeText('  ', start, end, 'end');
+              saveCurrent();
+              updatePreview();
+            });
 
-            saveCurrent();
-            updatePreview();
-          });
+            const refresh = document.querySelector('#refresh');
 
-          const refresh = document.querySelector('#refresh');
-
-          if (refresh) {
-            refresh.addEventListener('click', updatePreview);
-          }
-
-          async function saveProject() {
-            if (saving) return null;
-
-            saveCurrent();
-
-            const slugInput = document.querySelector('#slug');
-
-            const name = slugInput
-              ? slugInput.value.trim().toLowerCase()
-                  .replace(/\\s+/g, '-')
-                  .replace(/[^a-z0-9-_]/g, '')
-                  .slice(0, 80)
-              : '';
-
-            if (!name) {
-              alert('Seitennamen eingeben');
-              return null;
+            if (refresh) {
+              refresh.addEventListener('click', updatePreview);
             }
 
-            saving = true;
+            async function saveProject() {
+              if (saving) return null;
 
-            const saveButton = document.querySelector('#save');
-            const publishButton = document.querySelector('#publish');
+              saveCurrent();
 
-            if (saveButton) saveButton.disabled = true;
-            if (publishButton) publishButton.disabled = true;
+              const slugInput = document.querySelector('#slug');
 
-            try {
-              const response = await fetch(
-                isExisting
-                  ? '/api/pages/' + encodeURIComponent(name)
-                  : '/api/pages',
-                {
-                  method: isExisting ? 'PUT' : 'POST',
-                  headers: {
-                    'Content-Type': 'application/json'
-                  },
-                  body: JSON.stringify({
-                    slug: name,
-                    html: files.html,
-                    project: files
-                  })
-                }
-              );
+              const name = slugInput
+                ? slugInput.value.trim().toLowerCase()
+                    .replace(/\\s+/g, '-')
+                    .replace(/[^a-z0-9-_]/g, '')
+                    .slice(0, 80)
+                : '';
 
-              if (!response.ok) {
-                alert(await response.text());
+              if (!name) {
+                alert('Bitte zuerst einen Seitennamen eingeben.');
                 return null;
               }
 
-              // Nach erfolgreicher Neuanlage ist es eine bestehende Seite.
-              isExisting = true;
-              window.__GETVEXEL_EDIT__ = true;
+              saving = true;
 
-              if (slugInput) {
-                slugInput.value = name;
-                slugInput.readOnly = true;
-              }
+              const saveButton = document.querySelector('#save');
+              const publishButton = document.querySelector('#publish');
 
-              return response;
-            } catch (error) {
-              alert('Verbindung fehlgeschlagen. Bitte erneut versuchen.');
-              return null;
-            } finally {
-              saving = false;
+              if (saveButton) saveButton.disabled = true;
+              if (publishButton) publishButton.disabled = true;
 
-              if (saveButton) saveButton.disabled = false;
-              if (publishButton) publishButton.disabled = false;
-            }
-          }
-
-          const save = document.querySelector('#save');
-
-          if (save) {
-            save.addEventListener('click', async () => {
-              const response = await saveProject();
-
-              if (response && response.ok) {
-                alert('Gespeichert');
-              }
-            });
-          }
-
-          const publish = document.querySelector('#publish');
-
-          if (publish) {
-            publish.addEventListener('click', async () => {
-              const response = await saveProject();
-
-              if (response && response.ok) {
-                const slug = document.querySelector('#slug').value.trim();
-
-                window.open(
-                  '/' + encodeURIComponent(slug),
-                  '_blank',
-                  'noopener,noreferrer'
+              try {
+                const response = await fetch(
+                  isExisting
+                    ? '/api/pages/' + encodeURIComponent(name)
+                    : '/api/pages',
+                  {
+                    method: isExisting ? 'PUT' : 'POST',
+                    headers: {
+                      'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                      slug: name,
+                      html: files.html,
+                      project: files
+                    })
+                  }
                 );
+
+                if (!response.ok) {
+                  const message = await response.text();
+                  alert(message || 'Speichern fehlgeschlagen.');
+                  return null;
+                }
+
+                isExisting = true;
+                window.__GETVEXEL_EDIT__ = true;
+
+                if (slugInput) {
+                  slugInput.value = name;
+                  slugInput.readOnly = true;
+                }
+
+                return response;
+              } catch (error) {
+                alert('Verbindung fehlgeschlagen. Bitte erneut versuchen.');
+                return null;
+              } finally {
+                saving = false;
+
+                if (saveButton) saveButton.disabled = false;
+                if (publishButton) publishButton.disabled = false;
               }
-            });
+            }
+
+            const save = document.querySelector('#save');
+
+            if (save) {
+              save.addEventListener('click', async () => {
+                const response = await saveProject();
+
+                if (response && response.ok) {
+                  alert('Deine Seite wurde gespeichert.');
+                }
+              });
+            }
+
+            // VERÖFFENTLICHEN
+            // Das neue Fenster wird synchron beim Klick geöffnet.
+            // Safari blockiert dadurch das Fenster nicht wegen eines await.
+
+            const publish = document.querySelector('#publish');
+
+            if (publish) {
+              publish.addEventListener('click', async () => {
+                const slugInput = document.querySelector('#slug');
+
+                const slug = slugInput
+                  ? slugInput.value.trim().toLowerCase()
+                      .replace(/\\s+/g, '-')
+                      .replace(/[^a-z0-9-_]/g, '')
+                      .slice(0, 80)
+                  : '';
+
+                if (!slug) {
+                  alert('Bitte zuerst einen Seitennamen eingeben.');
+                  return;
+                }
+
+                // Wichtig: window.open muss vor dem ersten await passieren.
+                const newWindow = window.open('about:blank', '_blank');
+
+                if (newWindow) {
+                  newWindow.document.open();
+                  newWindow.document.write(
+                    '<!doctype html>' +
+                    '<html lang="de">' +
+                    '<head>' +
+                    '<meta charset="utf-8">' +
+                    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+                    '<title>GetVexel – Veröffentlichung</title>' +
+                    '<style>' +
+                    'body{margin:0;min-height:100vh;display:grid;place-items:center;' +
+                    'background:#0b1220;color:white;font-family:system-ui,sans-serif}' +
+                    'main{text-align:center;padding:24px}' +
+                    'p{color:#94a3b8}' +
+                    '</style>' +
+                    '</head>' +
+                    '<body>' +
+                    '<main>' +
+                    '<h2>Deine Seite wird veröffentlicht ...</h2>' +
+                    '<p>Bitte einen Moment warten.</p>' +
+                    '</main>' +
+                    '</body>' +
+                    '</html>'
+                  );
+                  newWindow.document.close();
+                }
+
+                const response = await saveProject();
+
+                if (response && response.ok) {
+                  const pageUrl = '/' + encodeURIComponent(slug);
+
+                  if (newWindow && !newWindow.closed) {
+                    newWindow.location.replace(pageUrl);
+                  } else {
+                    alert(
+                      'Deine Seite wurde veröffentlicht:\\n' +
+                      location.origin + pageUrl
+                    );
+                  }
+                } else {
+                  if (newWindow && !newWindow.closed) {
+                    newWindow.close();
+                  }
+                }
+              });
+            }
+
+            openFile('html');
+          };
+
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', boot);
+          } else {
+            boot();
           }
+        })();`;
 
-          openFile('html');
-        };
-
-        if (document.readyState === 'loading') {
-          document.addEventListener('DOMContentLoaded', boot);
-        } else {
-          boot();
-        }
-      })();`;
-
-      return new Response(script, {
-        headers: {
-          'Content-Type': 'application/javascript; charset=utf-8',
-          'Cache-Control': 'no-store, no-cache, must-revalidate'
-        }
-      });
-    }
-
-    // GOOGLE OAUTH
-
-    if (path === 'auth/google' && request.method === 'GET') {
-      if (
-        !env.GOOGLE_CLIENT_ID ||
-        !env.GOOGLE_CLIENT_SECRET ||
-        !env.SESSION_SECRET
-      ) {
-        return new Response(
-          'Google-OAuth ist nicht konfiguriert.',
-          { status: 500 }
-        );
+        return new Response(script, {
+          headers: {
+            'Content-Type': 'application/javascript; charset=utf-8',
+            'Cache-Control': 'no-store, no-cache, must-revalidate'
+          }
+        });
       }
 
-      const state = crypto.randomUUID();
-      const nonce = crypto.randomUUID();
+      // GOOGLE OAUTH
 
-      const verifierBytes = crypto.getRandomValues(
-        new Uint8Array(32)
-      );
-
-      const verifier = base64Url(verifierBytes);
-      const challenge = await sha256Base64Url(verifier);
-
-      const callback = `${url.origin}/auth/callback`;
-
-      const authorize = new URL(
-        'https://accounts.google.com/o/oauth2/v2/auth'
-      );
-
-      authorize.searchParams.set('client_id', env.GOOGLE_CLIENT_ID);
-      authorize.searchParams.set('redirect_uri', callback);
-      authorize.searchParams.set('response_type', 'code');
-      authorize.searchParams.set('scope', 'openid email profile');
-      authorize.searchParams.set('prompt', 'select_account');
-      authorize.searchParams.set('state', state);
-      authorize.searchParams.set('nonce', nonce);
-      authorize.searchParams.set('code_challenge', challenge);
-      authorize.searchParams.set('code_challenge_method', 'S256');
-
-      const oauthCookie = base64Url(
-        new TextEncoder().encode(
-          JSON.stringify({ state, nonce, verifier })
-        )
-      );
-
-      return redirect(
-        authorize.toString(),
-        302,
-        [cookie(STATE_COOKIE, oauthCookie, 'Max-Age=600')]
-      );
-    }
-
-    if (path === 'auth/callback' && request.method === 'GET') {
-      try {
-        const code = url.searchParams.get('code');
-        const state = url.searchParams.get('state');
-        const oauthCookie = getCookie(request, STATE_COOKIE);
-
-        if (!code || !state || !oauthCookie) {
-          return new Response(
-            'Ungültige OAuth-Anmeldung.',
-            { status: 400 }
-          );
-        }
-
-        let oauthData;
-
-        try {
-          oauthData = JSON.parse(
-            new TextDecoder().decode(unbase64Url(oauthCookie))
-          );
-        } catch {
-          return new Response(
-            'Ungültige OAuth-Anmeldung.',
-            { status: 400 }
-          );
-        }
-
-        if (state !== oauthData.state) {
-          return new Response(
-            'Ungültiger OAuth-State.',
-            { status: 400 }
-          );
-        }
-
-        const tokenResponse = await fetch(
-          'https://oauth2.googleapis.com/token',
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded'
-            },
-            body: new URLSearchParams({
-              code,
-              client_id: env.GOOGLE_CLIENT_ID,
-              client_secret: env.GOOGLE_CLIENT_SECRET,
-              redirect_uri: `${url.origin}/auth/callback`,
-              grant_type: 'authorization_code',
-              code_verifier: oauthData.verifier
-            })
-          }
-        );
-
-        if (!tokenResponse.ok) {
-          return new Response(
-            'Google-Anmeldung fehlgeschlagen.',
-            { status: 401 }
-          );
-        }
-
-        const tokens = await tokenResponse.json();
-
-        if (!tokens.id_token) {
-          return new Response(
-            'Google-ID-Token fehlt.',
-            { status: 401 }
-          );
-        }
-
-        const claims = await verifyGoogleIdToken(
-          tokens.id_token,
-          env.GOOGLE_CLIENT_ID,
-          oauthData.nonce
-        );
-
+      if (path === 'auth/google' && request.method === 'GET') {
         if (
-          !claims.sub ||
-          !claims.email ||
-          claims.email_verified !== true
+          !env.GOOGLE_CLIENT_ID ||
+          !env.GOOGLE_CLIENT_SECRET ||
+          !env.SESSION_SECRET
         ) {
-          return new Response(
-            'Google-Konto ist unvollständig oder die E-Mail ist nicht verifiziert.',
-            { status: 401 }
+          return textResponse(
+            'Google-OAuth ist nicht konfiguriert.',
+            500
           );
         }
 
-        const signed = await signSession(
-          env.SESSION_SECRET,
-          {
-            sub: claims.sub,
-            email: claims.email,
-            name: claims.name || '',
-            exp: Date.now() + 604800000
-          }
+        const state = crypto.randomUUID();
+        const nonce = crypto.randomUUID();
+
+        const verifierBytes = crypto.getRandomValues(
+          new Uint8Array(32)
+        );
+
+        const verifier = base64Url(verifierBytes);
+        const challenge = await sha256Base64Url(verifier);
+
+        const callback = `${url.origin}/auth/callback`;
+
+        const authorize = new URL(
+          'https://accounts.google.com/o/oauth2/v2/auth'
+        );
+
+        authorize.searchParams.set('client_id', env.GOOGLE_CLIENT_ID);
+        authorize.searchParams.set('redirect_uri', callback);
+        authorize.searchParams.set('response_type', 'code');
+        authorize.searchParams.set('scope', 'openid email profile');
+        authorize.searchParams.set('prompt', 'select_account');
+        authorize.searchParams.set('state', state);
+        authorize.searchParams.set('nonce', nonce);
+        authorize.searchParams.set('code_challenge', challenge);
+        authorize.searchParams.set('code_challenge_method', 'S256');
+
+        const oauthCookie = base64Url(
+          new TextEncoder().encode(
+            JSON.stringify({ state, nonce, verifier })
+          )
         );
 
         return redirect(
-          `${url.origin}/dashboard`,
-          303,
-          [
-            cookie(SESSION_COOKIE, signed, 'Max-Age=604800'),
-            cookie(STATE_COOKIE, '', 'Max-Age=0')
-          ]
+          authorize.toString(),
+          302,
+          [cookie(STATE_COOKIE, oauthCookie, 'Max-Age=600')]
         );
-      } catch (error) {
-        console.error('OAuth callback failed', error.name);
+      }
+
+      if (path === 'auth/callback' && request.method === 'GET') {
+        try {
+          const code = url.searchParams.get('code');
+          const state = url.searchParams.get('state');
+          const oauthCookie = getCookie(request, STATE_COOKIE);
+
+          if (!code || !state || !oauthCookie) {
+            return new Response(
+              'Ungültige OAuth-Anmeldung.',
+              { status: 400 }
+            );
+          }
+
+          let oauthData;
+
+          try {
+            oauthData = JSON.parse(
+              new TextDecoder().decode(unbase64Url(oauthCookie))
+            );
+          } catch {
+            return new Response(
+              'Ungültige OAuth-Anmeldung.',
+              { status: 400 }
+            );
+          }
+
+          if (state !== oauthData.state) {
+            return new Response(
+              'Ungültiger OAuth-State.',
+              { status: 400 }
+            );
+          }
+
+          const tokenResponse = await fetch(
+            'https://oauth2.googleapis.com/token',
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded'
+              },
+              body: new URLSearchParams({
+                code,
+                client_id: env.GOOGLE_CLIENT_ID,
+                client_secret: env.GOOGLE_CLIENT_SECRET,
+                redirect_uri: `${url.origin}/auth/callback`,
+                grant_type: 'authorization_code',
+                code_verifier: oauthData.verifier
+              })
+            }
+          );
+
+          if (!tokenResponse.ok) {
+            return new Response(
+              'Google-Anmeldung fehlgeschlagen.',
+              { status: 401 }
+            );
+          }
+
+          const tokens = await tokenResponse.json();
+
+          if (!tokens.id_token) {
+            return new Response(
+              'Google-ID-Token fehlt.',
+              { status: 401 }
+            );
+          }
+
+          const claims = await verifyGoogleIdToken(
+            tokens.id_token,
+            env.GOOGLE_CLIENT_ID,
+            oauthData.nonce
+          );
+
+          if (
+            !claims.sub ||
+            !claims.email ||
+            claims.email_verified !== true
+          ) {
+            return new Response(
+              'Google-Konto ist unvollständig oder die E-Mail ist nicht verifiziert.',
+              { status: 401 }
+            );
+          }
+
+          const signed = await signSession(
+            env.SESSION_SECRET,
+            {
+              sub: claims.sub,
+              email: claims.email,
+              name: claims.name || '',
+              exp: Date.now() + SESSION_DURATION
+            }
+          );
+
+          return redirect(
+            `${url.origin}/dashboard`,
+            303,
+            [
+              cookie(SESSION_COOKIE, signed, 'Max-Age=604800'),
+              cookie(STATE_COOKIE, '', 'Max-Age=0')
+            ]
+          );
+        } catch (error) {
+          console.error('OAuth callback failed', error.name);
+
+          return new Response(
+            'Google-Anmeldung konnte nicht abgeschlossen werden.',
+            { status: 500 }
+          );
+        }
+      }
+
+      if (path === 'auth/logout' && request.method === 'POST') {
+        return redirect(
+          `${url.origin}/`,
+          303,
+          [cookie(SESSION_COOKIE, '', 'Max-Age=0')]
+        );
+      }
+
+      // STARTSEITE
+
+      if (path === '' && request.method === 'GET') {
+        const user = await currentUser(request, env);
+
+        if (user) {
+          return redirect(`${url.origin}/dashboard`);
+        }
 
         return new Response(
-          'Google-Anmeldung konnte nicht abgeschlossen werden.',
-          { status: 500 }
-        );
-      }
-    }
-
-    if (path === 'auth/logout' && request.method === 'POST') {
-      return redirect(
-        `${url.origin}/`,
-        303,
-        [cookie(SESSION_COOKIE, '', 'Max-Age=0')]
-      );
-    }
-
-    // STARTSEITE
-
-    if (path === '' && request.method === 'GET') {
-      const user = await currentUser(request, env);
-
-      if (user) {
-        return redirect(`${url.origin}/dashboard`);
-      }
-
-      return new Response(
-        shell(
-          'Anmelden',
-          `
+          shell(
+            'Anmelden',
+            `
 <section class="card" style="max-width:560px;margin:90px auto;text-align:center">
 <div class="brand">GetVexel</div>
 <h1>Eigene Seiten erstellen</h1>
 <p>Melde dich mit Google an.</p>
 <a class="button" href="/auth/google">Mit Google anmelden</a>
 </section>`
-        ),
-        { headers: privateHeaders() }
-      );
-    }
-
-    // DASHBOARD
-
-    if (path.startsWith('dashboard')) {
-      if (request.method !== 'GET') {
-        return new Response(
-          'Method nicht erlaubt',
-          { status: 405 }
+          ),
+          { headers: privateHeaders() }
         );
       }
 
-      const user = await currentUser(request, env);
+      // DASHBOARD
 
-      if (!user) {
-        return redirect(`${url.origin}/auth/google`);
-      }
+      if (path.startsWith('dashboard')) {
+        if (request.method !== 'GET') {
+          return textResponse('Method nicht erlaubt.', 405);
+        }
 
-      if (path === 'dashboard') {
-        const listing = await env.PAGES_KV.list({
-          prefix: `owner:${user.sub}:`,
-          limit: 1000
-        });
+        const user = await currentUser(request, env);
 
-        const pages = [];
+        if (!user) {
+          return redirect(`${url.origin}/auth/google`);
+        }
 
-        for (const key of listing.keys) {
-          const slug = key.name.slice(
-            `owner:${user.sub}:`.length
+        if (path === 'dashboard') {
+          const listing = await env.PAGES_KV.list({
+            prefix: `owner:${user.sub}:`,
+            limit: 1000
+          });
+
+          const pages = [];
+
+          for (const key of listing.keys) {
+            const slug = key.name.slice(
+              `owner:${user.sub}:`.length
+            );
+
+            const html = await env.PAGES_KV.get(`page:${slug}`);
+            const meta = await env.PAGES_KV.get(
+              `meta:${slug}`,
+              'json'
+            );
+
+            if (html !== null && meta?.owner === user.sub) {
+              pages.push({ slug, html });
+            }
+          }
+
+          const credits = env.DB
+            ? await monthlyCredits(env, user.sub)
+            : 5000;
+
+          pages.sort((a, b) => a.slug.localeCompare(b.slug));
+
+          const pagesOrigin = getPagesOrigin(env, url);
+
+          return new Response(
+            dashboard(user, pages, pagesOrigin, credits),
+            { headers: privateHeaders() }
+          );
+        }
+
+        if (path === 'dashboard/new') {
+          return new Response(
+            templatesPage(),
+            { headers: privateHeaders() }
+          );
+        }
+
+        if (path.startsWith('dashboard/template/')) {
+          const name = cleanSlug(
+            path.slice('dashboard/template/'.length)
           );
 
-          const html = await env.PAGES_KV.get(`page:${slug}`);
+          const template = TEMPLATES[name];
+
+          if (!template) {
+            return textResponse('Vorlage nicht gefunden.', 404);
+          }
+
+          return new Response(
+            editorPage({ project: template }),
+            { headers: privateHeaders() }
+          );
+        }
+
+        if (path.startsWith('dashboard/edit/')) {
+          const slug = cleanSlug(
+            path.slice('dashboard/edit/'.length)
+          );
+
           const meta = await env.PAGES_KV.get(
             `meta:${slug}`,
             'json'
           );
 
-          if (html !== null && meta?.owner === user.sub) {
-            pages.push({ slug, html });
+          if (!meta || meta.owner !== user.sub) {
+            return textResponse('Seite nicht gefunden.', 404);
           }
-        }
 
-        let credits = 5000;
+          const html = await env.PAGES_KV.get(`page:${slug}`);
 
-        if (env.DB) {
-          credits = await monthlyCredits(env, user.sub);
-        }
+          const project = await env.PAGES_KV.get(
+            `project:${slug}`,
+            'json'
+          );
 
-        pages.sort((a, b) => a.slug.localeCompare(b.slug));
-
-        const pagesOrigin = getPagesOrigin(env, url);
-
-        return new Response(
-          dashboard(user, pages, pagesOrigin, credits),
-          { headers: privateHeaders() }
-        );
-      }
-
-      if (path === 'dashboard/new') {
-        return new Response(
-          templatesPage(),
-          { headers: privateHeaders() }
-        );
-      }
-
-      if (path.startsWith('dashboard/template/')) {
-        const name = cleanSlug(
-          path.slice('dashboard/template/'.length)
-        );
-
-        const template = TEMPLATES[name];
-
-        if (!template) {
           return new Response(
-            'Vorlage nicht gefunden.',
-            { status: 404 }
+            editorPage({ slug, html: html || '', project }),
+            { headers: privateHeaders() }
           );
         }
 
-        // Wichtig: Vorlage ist noch keine gespeicherte Seite.
-        return new Response(
-          editorPage({ project: template }),
-          { headers: privateHeaders() }
-        );
+        return textResponse('Seite nicht gefunden.', 404);
       }
 
-      if (path.startsWith('dashboard/edit/')) {
-        const slug = cleanSlug(
-          path.slice('dashboard/edit/'.length)
-        );
+      // DATENBANKEN-SEITE
 
-        const meta = await env.PAGES_KV.get(
-          `meta:${slug}`,
-          'json'
-        );
+      if (path === 'databases' && request.method === 'GET') {
+        const user = await currentUser(request, env);
 
-        if (!meta || meta.owner !== user.sub) {
-          return new Response(
-            'Seite nicht gefunden.',
-            { status: 404 }
-          );
+        if (!user) {
+          return redirect(`${url.origin}/auth/google`);
         }
 
-        const html = await env.PAGES_KV.get(`page:${slug}`);
+        if (!env.DB) {
+          return textResponse('D1 ist nicht konfiguriert.', 500);
+        }
 
-        const project = await env.PAGES_KV.get(
-          `project:${slug}`,
-          'json'
-        );
+        const credits = await monthlyCredits(env, user.sub);
 
-        return new Response(
-          editorPage({ slug, html: html || '', project }),
-          { headers: privateHeaders() }
-        );
-      }
+        const result = await env.DB.prepare(
+          'SELECT id, name FROM user_databases WHERE owner_sub = ? ORDER BY name'
+        ).bind(user.sub).all();
 
-      return new Response(
-        'Seite nicht gefunden.',
-        { status: 404 }
-      );
-    }
-
-    // DATENBANKEN-SEITE
-
-    if (path === 'databases' && request.method === 'GET') {
-      const user = await currentUser(request, env);
-
-      if (!user) {
-        return redirect(`${url.origin}/auth/google`);
-      }
-
-      if (!env.DB) {
-        return new Response(
-          'D1 ist nicht konfiguriert.',
-          { status: 500 }
-        );
-      }
-
-      const credits = await monthlyCredits(env, user.sub);
-
-      const result = await env.DB.prepare(
-        'SELECT id, name FROM user_databases WHERE owner_sub = ? ORDER BY name'
-      ).bind(user.sub).all();
-
-      const cards = (result.results || []).map(db => `
+        const cards = (result.results || []).map(db => `
 <article class="card row">
 <strong>${escapeHtml(db.name)}</strong>
 <div class="actions">
@@ -1399,10 +1458,10 @@ export default {
 </div>
 </article>`).join('');
 
-      return new Response(
-        shell(
-          'Datenbanken',
-          `
+        return new Response(
+          shell(
+            'Datenbanken',
+            `
 <div class="top">
 <div>
 <div class="brand">Meine Datenbanken</div>
@@ -1455,712 +1514,608 @@ async function removeDb(id) {
   }
 }
 </script>`
-        ),
-        { headers: privateHeaders() }
-      );
-    }
-
-    // DATENBANK-API
-
-    if (
-      path === 'api/databases' ||
-      path.startsWith('api/databases/')
-    ) {
-      const user = await currentUser(request, env);
-
-      if (!user) {
-        return new Response(
-          'Anmeldung erforderlich.',
-          { status: 401 }
+          ),
+          { headers: privateHeaders() }
         );
       }
 
-      if (!env.DB) {
-        return new Response(
-          'D1 ist nicht konfiguriert.',
-          { status: 500 }
-        );
-      }
-
-      const id = cleanSlug(
-        path.startsWith('api/databases/')
-          ? path.slice('api/databases/'.length)
-          : ''
-      );
-
-      if (request.method === 'POST' && path === 'api/databases') {
-        let body;
-
-        try {
-          body = await readJson(request, 65536);
-        } catch (error) {
-          return new Response(
-            error.message === 'REQUEST_TOO_LARGE'
-              ? 'Anfrage ist zu groß.'
-              : 'Ungültige Daten.',
-            { status: error.message === 'REQUEST_TOO_LARGE' ? 413 : 400 }
-          );
-        }
-
-        if (
-          !body ||
-          typeof body !== 'object' ||
-          Array.isArray(body)
-        ) {
-          return new Response(
-            'Ungültige Daten.',
-            { status: 400 }
-          );
-        }
-
-        const name = String(body.name || '').trim().slice(0, 40);
-
-        if (!name) {
-          return new Response(
-            'Name fehlt.',
-            { status: 400 }
-          );
-        }
-
-        const databaseId = crypto.randomUUID();
-
-        try {
-          await env.DB.prepare(
-            'INSERT INTO user_databases(id, owner_sub, name) VALUES(?, ?, ?)'
-          ).bind(databaseId, user.sub, name).run();
-        } catch (error) {
-          if (
-            String(error.message || error).includes(
-              'database limit reached'
-            )
-          ) {
-            return new Response(
-              'Maximal drei Datenbanken.',
-              { status: 409 }
-            );
-          }
-
-          throw error;
-        }
-
-        return new Response(
-          JSON.stringify({ id: databaseId, name }),
-          {
-            headers: {
-              'Content-Type': 'application/json'
-            }
-          }
-        );
-      }
-
-      if (request.method === 'POST' && id) {
-        const owned = await env.DB.prepare(
-          'SELECT id FROM user_databases WHERE id=? AND owner_sub=?'
-        ).bind(id, user.sub).first();
-
-        if (!owned) {
-          return new Response(
-            'Datenbank nicht gefunden.',
-            { status: 404 }
-          );
-        }
-
-        let body;
-
-        try {
-          body = await readJson(request, 65536);
-        } catch (error) {
-          return new Response(
-            error.message === 'REQUEST_TOO_LARGE'
-              ? 'Anfrage ist zu groß.'
-              : 'Ungültige Daten.',
-            { status: error.message === 'REQUEST_TOO_LARGE' ? 413 : 400 }
-          );
-        }
-
-        if (
-          !body ||
-          typeof body !== 'object' ||
-          Array.isArray(body)
-        ) {
-          return new Response(
-            'Ungültige Daten.',
-            { status: 400 }
-          );
-        }
-
-        await monthlyCredits(env, user.sub);
-
-        const itemId = crypto.randomUUID();
-
-        const data = JSON.stringify(
-          body.data && typeof body.data === 'object'
-            ? body.data
-            : {}
-        );
-
-        const insert = env.DB.prepare(
-          `INSERT INTO database_items
-          (id,database_id,owner_sub,name,json_data,created_at)
-          SELECT ?,?,?,?,?,?
-          WHERE EXISTS (
-            SELECT 1 FROM user_credits
-            WHERE owner_sub=? AND credits>=10
-          )`
-        ).bind(
-          itemId,
-          id,
-          user.sub,
-          String(body.name || 'Eintrag').slice(0, 80),
-          data,
-          Date.now(),
-          user.sub
-        );
-
-        const charge = env.DB.prepare(
-          'UPDATE user_credits SET credits=credits-10 WHERE owner_sub=? AND credits>=10'
-        ).bind(user.sub);
-
-        const result = await env.DB.batch([insert, charge]);
-
-        if (
-          !result[0].meta.changes ||
-          !result[1].meta.changes
-        ) {
-          return new Response(
-            'Nicht genügend Credits.',
-            { status: 402 }
-          );
-        }
-
-        return new Response(
-          JSON.stringify({ id: itemId }),
-          {
-            headers: {
-              'Content-Type': 'application/json'
-            }
-          }
-        );
-      }
-
-      if (request.method === 'GET' && id) {
-        const owned = await env.DB.prepare(
-          'SELECT id,name FROM user_databases WHERE id=? AND owner_sub=?'
-        ).bind(id, user.sub).first();
-
-        if (!owned) {
-          return new Response(
-            'Datenbank nicht gefunden.',
-            { status: 404 }
-          );
-        }
-
-        await monthlyCredits(env, user.sub);
-
-        const charge = env.DB.prepare(
-          'UPDATE user_credits SET credits=credits-5 WHERE owner_sub=? AND credits>=5'
-        ).bind(user.sub);
-
-        const items = env.DB.prepare(
-          'SELECT id,name,json_data,created_at FROM database_items WHERE database_id=? AND owner_sub=? ORDER BY created_at DESC'
-        ).bind(id, user.sub);
-
-        const result = await env.DB.batch([charge, items]);
-
-        if (!result[0].meta.changes) {
-          return new Response(
-            'Nicht genügend Credits.',
-            { status: 402 }
-          );
-        }
-
-        return new Response(
-          JSON.stringify({
-            database: owned,
-            items: result[1].results || []
-          }),
-          {
-            headers: {
-              'Content-Type': 'application/json'
-            }
-          }
-        );
-      }
-
-      if (request.method === 'DELETE' && id) {
-        await env.DB.prepare(
-          'DELETE FROM database_items WHERE database_id=? AND owner_sub=?'
-        ).bind(id, user.sub).run();
-
-        const deleted = await env.DB.prepare(
-          'DELETE FROM user_databases WHERE id=? AND owner_sub=?'
-        ).bind(id, user.sub).run();
-
-        if (!deleted.meta.changes) {
-          return new Response(
-            'Datenbank nicht gefunden.',
-            { status: 404 }
-          );
-        }
-
-        return new Response('OK');
-      }
-
-      return new Response(
-        'Method nicht erlaubt.',
-        { status: 405 }
-      );
-    }
-
-    // BILDER-UPLOAD
-
-    if (path === 'api/assets' && request.method === 'POST') {
-      const user = await currentUser(request, env);
-
-      if (!user) {
-        return new Response(
-          'Anmeldung erforderlich.',
-          { status: 401 }
-        );
-      }
-
-      const contentLength = Number(
-        request.headers.get('Content-Length') || 0
-      );
-
-      if (contentLength > 2200000) {
-        return new Response(
-          'Upload zu groß.',
-          { status: 413 }
-        );
-      }
-
-      let form;
-
-      try {
-        form = await request.formData();
-      } catch {
-        return new Response(
-          'Ungültiger Upload.',
-          { status: 400 }
-        );
-      }
-
-      const file = form.get('file');
-
-      if (!(file instanceof File)) {
-        return new Response(
-          'Keine gültige Bilddatei.',
-          { status: 400 }
-        );
-      }
-
-      if (file.size > MAX_IMAGE_SIZE) {
-        return new Response(
-          'Bild zu groß.',
-          { status: 413 }
-        );
-      }
-
-      const bytes = new Uint8Array(
-        await file.arrayBuffer()
-      );
-
-      const detectedType = validImageBytes(bytes);
-
-      if (!detectedType) {
-        return new Response(
-          'Nur PNG, JPEG, GIF oder WebP sind erlaubt.',
-          { status: 415 }
-        );
-      }
-
-      let binary = '';
-
-      for (let i = 0; i < bytes.length; i += 8192) {
-        binary += String.fromCharCode(
-          ...bytes.subarray(i, i + 8192)
-        );
-      }
-
-      const id = crypto.randomUUID();
-
-      await env.PAGES_KV.put(
-        `asset:${id}`,
-        JSON.stringify({
-          owner: user.sub,
-          type: detectedType,
-          data: btoa(binary)
-        })
-      );
-
-      const pagesOrigin = getPagesOrigin(env, url);
-
-      return new Response(
-        JSON.stringify({
-          url: `${pagesOrigin}/assets/${id}`
-        }),
-        {
-          headers: {
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-    }
-
-    // ALTE ASSET-URLS WEITERLEITEN
-
-    if (path.startsWith('assets/') && request.method === 'GET') {
-      const pagesOrigin = getPagesOrigin(env, url);
-
-      return redirect(
-        `${pagesOrigin}/${path}`,
-        302
-      );
-    }
-
-    // SEITEN-API
-
-    if (
-      path === 'api/pages' ||
-      path.startsWith('api/pages/')
-    ) {
-      const user = await currentUser(request, env);
-
-      if (!user) {
-        return new Response(
-          'Anmeldung erforderlich.',
-          { status: 401 }
-        );
-      }
-
-      const slug = cleanSlug(
-        path.startsWith('api/pages/')
-          ? path.slice('api/pages/'.length)
-          : ''
-      );
-
-      // NEUE SEITE ERSTELLEN
+      // DATENBANK-API
 
       if (
-        request.method === 'POST' &&
-        path === 'api/pages'
+        path === 'api/databases' ||
+        path.startsWith('api/databases/')
       ) {
+        const user = await currentUser(request, env);
+
+        if (!user) {
+          return textResponse('Anmeldung erforderlich.', 401);
+        }
+
         if (!env.DB) {
-          return new Response(
-            'D1 ist nicht konfiguriert.',
-            { status: 500 }
-          );
+          return textResponse('D1 ist nicht konfiguriert.', 500);
         }
 
-        let body;
+        const id = path.startsWith('api/databases/')
+          ? path.slice('api/databases/'.length)
+          : '';
 
-        try {
-          body = await readJson(request, MAX_REQUEST_SIZE);
-        } catch (error) {
-          return new Response(
-            error.message === 'REQUEST_TOO_LARGE'
-              ? 'Projekt ist zu groß.'
-              : 'Ungültige Daten.',
-            { status: error.message === 'REQUEST_TOO_LARGE' ? 413 : 400 }
-          );
+        if (id && !/^[a-zA-Z0-9-]{1,80}$/.test(id)) {
+          return textResponse('Ungültige Datenbank-ID.', 400);
         }
 
-        if (
-          !body ||
-          typeof body !== 'object' ||
-          Array.isArray(body)
-        ) {
-          return new Response(
-            'Ungültige Daten.',
-            { status: 400 }
-          );
-        }
+        if (request.method === 'POST' && path === 'api/databases') {
+          let body;
 
-        const name = cleanSlug(body.slug || '');
-
-        if (!name) {
-          return new Response(
-            'Seitennamen eingeben.',
-            { status: 400 }
-          );
-        }
-
-        let project;
-
-        try {
-          project = validateProjectBody(body);
-        } catch (error) {
-          return new Response(
-            error.message,
-            { status: 400 }
-          );
-        }
-
-        // Namen reservieren.
-
-        try {
-          await env.DB.prepare(
-            'INSERT INTO reserved_slugs(slug, owner_sub, status) VALUES(?, ?, ?)'
-          ).bind(name, user.sub, 'pending').run();
-        } catch (error) {
-          const message = String(error.message || error);
+          try {
+            body = await readJson(request, 65536);
+          } catch (error) {
+            return textResponse(
+              error.message === 'REQUEST_TOO_LARGE'
+                ? 'Anfrage ist zu groß.'
+                : 'Ungültige Daten.',
+              error.message === 'REQUEST_TOO_LARGE' ? 413 : 400
+            );
+          }
 
           if (
-            message.includes('UNIQUE') ||
-            message.includes('PRIMARY')
+            !body ||
+            typeof body !== 'object' ||
+            Array.isArray(body)
           ) {
-            const existing = await env.DB.prepare(
-              'SELECT owner_sub, status FROM reserved_slugs WHERE slug=?'
-            ).bind(name).first();
+            return textResponse('Ungültige Daten.', 400);
+          }
 
-            if (!existing) {
-              return new Response(
-                'Seitenname konnte nicht geprüft werden.',
-                { status: 409 }
-              );
-            }
+          const name = String(body.name || '').trim().slice(0, 40);
 
-            if (existing.owner_sub !== user.sub) {
-              return new Response(
-                'Seitenname bereits vergeben.',
-                { status: 409 }
-              );
-            }
+          if (!name) {
+            return textResponse('Name fehlt.', 400);
+          }
 
-            const meta = await env.PAGES_KV.get(
-              `meta:${name}`,
-              'json'
-            );
+          const databaseId = crypto.randomUUID();
 
-            if (meta && existing.status === 'complete') {
-              return new Response(
-                'Seitenname bereits vergeben.',
-                { status: 409 }
-              );
-            }
-
-            await env.PAGES_KV.delete(`page:${name}`);
-            await env.PAGES_KV.delete(`project:${name}`);
-            await env.PAGES_KV.delete(`meta:${name}`);
-            await env.PAGES_KV.delete(`owner:${user.sub}:${name}`);
-
+          try {
             await env.DB.prepare(
-              "UPDATE reserved_slugs SET status='pending' WHERE slug=? AND owner_sub=?"
-            ).bind(name, user.sub).run();
-          } else {
+              'INSERT INTO user_databases(id, owner_sub, name) VALUES(?, ?, ?)'
+            ).bind(databaseId, user.sub, name).run();
+          } catch (error) {
+            if (
+              String(error.message || error).includes(
+                'database limit reached'
+              )
+            ) {
+              return textResponse('Maximal drei Datenbanken.', 409);
+            }
+
             throw error;
           }
+
+          return jsonResponse({ id: databaseId, name });
         }
 
-        const html = combineProject(project);
+        if (request.method === 'POST' && id) {
+          const owned = await env.DB.prepare(
+            'SELECT id FROM user_databases WHERE id=? AND owner_sub=?'
+          ).bind(id, user.sub).first();
+
+          if (!owned) {
+            return textResponse('Datenbank nicht gefunden.', 404);
+          }
+
+          let body;
+
+          try {
+            body = await readJson(request, 65536);
+          } catch (error) {
+            return textResponse(
+              error.message === 'REQUEST_TOO_LARGE'
+                ? 'Anfrage ist zu groß.'
+                : 'Ungültige Daten.',
+              error.message === 'REQUEST_TOO_LARGE' ? 413 : 400
+            );
+          }
+
+          if (
+            !body ||
+            typeof body !== 'object' ||
+            Array.isArray(body)
+          ) {
+            return textResponse('Ungültige Daten.', 400);
+          }
+
+          await monthlyCredits(env, user.sub);
+
+          const itemId = crypto.randomUUID();
+
+          const data = JSON.stringify(
+            body.data && typeof body.data === 'object'
+              ? body.data
+              : {}
+          );
+
+          const insert = env.DB.prepare(
+            `INSERT INTO database_items
+            (id,database_id,owner_sub,name,json_data,created_at)
+            SELECT ?,?,?,?,?,?
+            WHERE EXISTS (
+              SELECT 1 FROM user_credits
+              WHERE owner_sub=? AND credits>=10
+            )`
+          ).bind(
+            itemId,
+            id,
+            user.sub,
+            String(body.name || 'Eintrag').slice(0, 80),
+            data,
+            Date.now(),
+            user.sub
+          );
+
+          const charge = env.DB.prepare(
+            'UPDATE user_credits SET credits=credits-10 WHERE owner_sub=? AND credits>=10'
+          ).bind(user.sub);
+
+          const result = await env.DB.batch([insert, charge]);
+
+          if (
+            !result[0].meta.changes ||
+            !result[1].meta.changes
+          ) {
+            return textResponse('Nicht genügend Credits.', 402);
+          }
+
+          return jsonResponse({ id: itemId });
+        }
+
+        if (request.method === 'GET' && id) {
+          const owned = await env.DB.prepare(
+            'SELECT id,name FROM user_databases WHERE id=? AND owner_sub=?'
+          ).bind(id, user.sub).first();
+
+          if (!owned) {
+            return textResponse('Datenbank nicht gefunden.', 404);
+          }
+
+          await monthlyCredits(env, user.sub);
+
+          const charge = env.DB.prepare(
+            'UPDATE user_credits SET credits=credits-5 WHERE owner_sub=? AND credits>=5'
+          ).bind(user.sub);
+
+          const items = env.DB.prepare(
+            'SELECT id,name,json_data,created_at FROM database_items WHERE database_id=? AND owner_sub=? ORDER BY created_at DESC'
+          ).bind(id, user.sub);
+
+          const result = await env.DB.batch([charge, items]);
+
+          if (!result[0].meta.changes) {
+            return textResponse('Nicht genügend Credits.', 402);
+          }
+
+          return jsonResponse({
+            database: owned,
+            items: result[1].results || []
+          });
+        }
+
+        if (request.method === 'DELETE' && id) {
+          await env.DB.prepare(
+            'DELETE FROM database_items WHERE database_id=? AND owner_sub=?'
+          ).bind(id, user.sub).run();
+
+          const deleted = await env.DB.prepare(
+            'DELETE FROM user_databases WHERE id=? AND owner_sub=?'
+          ).bind(id, user.sub).run();
+
+          if (!deleted.meta.changes) {
+            return textResponse('Datenbank nicht gefunden.', 404);
+          }
+
+          return textResponse('OK');
+        }
+
+        return textResponse('Method nicht erlaubt.', 405);
+      }
+
+      // BILDER-UPLOAD
+
+      if (path === 'api/assets' && request.method === 'POST') {
+        const user = await currentUser(request, env);
+
+        if (!user) {
+          return textResponse('Anmeldung erforderlich.', 401);
+        }
+
+        const contentLength = Number(
+          request.headers.get('Content-Length') || 0
+        );
+
+        if (contentLength > 2200000) {
+          return textResponse('Upload zu groß.', 413);
+        }
+
+        let form;
 
         try {
+          form = await request.formData();
+        } catch {
+          return textResponse('Ungültiger Upload.', 400);
+        }
+
+        const file = form.get('file');
+
+        if (!(file instanceof File)) {
+          return textResponse('Keine gültige Bilddatei.', 400);
+        }
+
+        if (file.size > MAX_IMAGE_SIZE) {
+          return textResponse('Bild zu groß.', 413);
+        }
+
+        const bytes = new Uint8Array(
+          await file.arrayBuffer()
+        );
+
+        const detectedType = validImageBytes(bytes);
+
+        if (!detectedType) {
+          return textResponse(
+            'Nur PNG, JPEG, GIF oder WebP sind erlaubt.',
+            415
+          );
+        }
+
+        let binary = '';
+
+        for (let i = 0; i < bytes.length; i += 8192) {
+          binary += String.fromCharCode(
+            ...bytes.subarray(i, i + 8192)
+          );
+        }
+
+        const id = crypto.randomUUID();
+
+        await env.PAGES_KV.put(
+          `asset:${id}`,
+          JSON.stringify({
+            owner: user.sub,
+            type: detectedType,
+            data: btoa(binary)
+          })
+        );
+
+        const pagesOrigin = getPagesOrigin(env, url);
+
+        return jsonResponse({
+          url: `${pagesOrigin}/assets/${id}`
+        });
+      }
+
+      // ALTE ASSET-URLS WEITERLEITEN
+
+      if (path.startsWith('assets/') && request.method === 'GET') {
+        const pagesOrigin = getPagesOrigin(env, url);
+
+        return redirect(
+          `${pagesOrigin}/${path}`,
+          302
+        );
+      }
+
+      // SEITEN-API
+
+      if (
+        path === 'api/pages' ||
+        path.startsWith('api/pages/')
+      ) {
+        const user = await currentUser(request, env);
+
+        if (!user) {
+          return textResponse('Anmeldung erforderlich.', 401);
+        }
+
+        const slug = path.startsWith('api/pages/')
+          ? cleanSlug(path.slice('api/pages/'.length))
+          : '';
+
+        // NEUE SEITE ERSTELLEN
+
+        if (
+          request.method === 'POST' &&
+          path === 'api/pages'
+        ) {
+          if (!env.DB) {
+            return textResponse('D1 ist nicht konfiguriert.', 500);
+          }
+
+          let body;
+
+          try {
+            body = await readJson(request, MAX_REQUEST_SIZE);
+          } catch (error) {
+            return textResponse(
+              error.message === 'REQUEST_TOO_LARGE'
+                ? 'Projekt ist zu groß.'
+                : 'Ungültige Daten.',
+              error.message === 'REQUEST_TOO_LARGE' ? 413 : 400
+            );
+          }
+
+          if (
+            !body ||
+            typeof body !== 'object' ||
+            Array.isArray(body)
+          ) {
+            return textResponse('Ungültige Daten.', 400);
+          }
+
+          const name = cleanSlug(body.slug || '');
+
+          if (!name) {
+            return textResponse('Seitennamen eingeben.', 400);
+          }
+
+          let project;
+
+          try {
+            project = validateProjectBody(body);
+          } catch (error) {
+            return textResponse(error.message, 400);
+          }
+
+          // Seitenname reservieren.
+
+          try {
+            await env.DB.prepare(
+              'INSERT INTO reserved_slugs(slug, owner_sub, status) VALUES(?, ?, ?)'
+            ).bind(name, user.sub, 'pending').run();
+          } catch (error) {
+            const message = String(error.message || error);
+
+            if (
+              message.includes('UNIQUE') ||
+              message.includes('PRIMARY')
+            ) {
+              const existing = await env.DB.prepare(
+                'SELECT owner_sub, status FROM reserved_slugs WHERE slug=?'
+              ).bind(name).first();
+
+              if (!existing) {
+                return textResponse(
+                  'Seitenname konnte nicht geprüft werden.',
+                  409
+                );
+              }
+
+              if (existing.owner_sub !== user.sub) {
+                return textResponse(
+                  'Seitenname bereits vergeben.',
+                  409
+                );
+              }
+
+              const meta = await env.PAGES_KV.get(
+                `meta:${name}`,
+                'json'
+              );
+
+              if (meta && existing.status === 'complete') {
+                return textResponse(
+                  'Seitenname bereits vergeben.',
+                  409
+                );
+              }
+
+              await env.PAGES_KV.delete(`page:${name}`);
+              await env.PAGES_KV.delete(`project:${name}`);
+              await env.PAGES_KV.delete(`meta:${name}`);
+              await env.PAGES_KV.delete(`owner:${user.sub}:${name}`);
+
+              await env.DB.prepare(
+                "UPDATE reserved_slugs SET status='pending' WHERE slug=? AND owner_sub=?"
+              ).bind(name, user.sub).run();
+            } else {
+              throw error;
+            }
+          }
+
+          const html = combineProject(project);
+
+          try {
+            await env.PAGES_KV.put(
+              `page:${name}`,
+              html
+            );
+
+            await env.PAGES_KV.put(
+              `project:${name}`,
+              JSON.stringify(project)
+            );
+
+            await env.PAGES_KV.put(
+              `meta:${name}`,
+              JSON.stringify({
+                owner: user.sub,
+                updatedAt: Date.now()
+              })
+            );
+
+            await env.PAGES_KV.put(
+              `owner:${user.sub}:${name}`,
+              '1'
+            );
+
+            await env.DB.prepare(
+              "UPDATE reserved_slugs SET status='complete' WHERE slug=? AND owner_sub=?"
+            ).bind(name, user.sub).run();
+          } catch (error) {
+            await env.DB.prepare(
+              "UPDATE reserved_slugs SET status='failed' WHERE slug=? AND owner_sub=?"
+            ).bind(name, user.sub).run();
+
+            console.error(
+              'Incomplete page creation',
+              name,
+              error.name
+            );
+
+            return textResponse(
+              'Seite konnte nicht vollständig veröffentlicht werden.',
+              500
+            );
+          }
+
+          return textResponse('OK');
+        }
+
+        // BESTEHENDE SEITE BEARBEITEN
+
+        if (
+          request.method === 'PUT' &&
+          slug
+        ) {
+          const meta = await env.PAGES_KV.get(
+            `meta:${slug}`,
+            'json'
+          );
+
+          if (!meta) {
+            return textResponse('Seite nicht gefunden.', 404);
+          }
+
+          if (meta.owner !== user.sub) {
+            return textResponse('Nicht erlaubt.', 403);
+          }
+
+          let body;
+
+          try {
+            body = await readJson(request, MAX_REQUEST_SIZE);
+          } catch (error) {
+            return textResponse(
+              error.message === 'REQUEST_TOO_LARGE'
+                ? 'Projekt ist zu groß.'
+                : 'Ungültige Daten.',
+              error.message === 'REQUEST_TOO_LARGE' ? 413 : 400
+            );
+          }
+
+          let project;
+
+          try {
+            project = validateProjectBody(body);
+          } catch (error) {
+            return textResponse(error.message, 400);
+          }
+
           await env.PAGES_KV.put(
-            `page:${name}`,
-            html
+            `page:${slug}`,
+            combineProject(project)
           );
 
           await env.PAGES_KV.put(
-            `project:${name}`,
+            `project:${slug}`,
             JSON.stringify(project)
           );
 
           await env.PAGES_KV.put(
-            `meta:${name}`,
+            `meta:${slug}`,
             JSON.stringify({
               owner: user.sub,
               updatedAt: Date.now()
             })
           );
 
-          await env.PAGES_KV.put(
-            `owner:${user.sub}:${name}`,
-            '1'
-          );
-
-          await env.DB.prepare(
-            "UPDATE reserved_slugs SET status='complete' WHERE slug=? AND owner_sub=?"
-          ).bind(name, user.sub).run();
-        } catch (error) {
-          await env.DB.prepare(
-            "UPDATE reserved_slugs SET status='failed' WHERE slug=? AND owner_sub=?"
-          ).bind(name, user.sub).run();
-
-          console.error(
-            'Incomplete page creation',
-            name,
-            error.name
-          );
-
-          return new Response(
-            'Seite konnte nicht vollständig veröffentlicht werden.',
-            { status: 500 }
-          );
+          return textResponse('OK');
         }
 
-        return new Response('OK');
+        // SEITE LÖSCHEN
+
+        if (
+          request.method === 'DELETE' &&
+          slug
+        ) {
+          const meta = await env.PAGES_KV.get(
+            `meta:${slug}`,
+            'json'
+          );
+
+          if (!meta) {
+            return textResponse('Seite nicht gefunden.', 404);
+          }
+
+          if (meta.owner !== user.sub) {
+            return textResponse('Nicht erlaubt.', 403);
+          }
+
+          await env.PAGES_KV.delete(`page:${slug}`);
+          await env.PAGES_KV.delete(`project:${slug}`);
+          await env.PAGES_KV.delete(`meta:${slug}`);
+          await env.PAGES_KV.delete(`owner:${user.sub}:${slug}`);
+
+          if (env.DB) {
+            await env.DB.prepare(
+              'DELETE FROM reserved_slugs WHERE slug=? AND owner_sub=?'
+            ).bind(slug, user.sub).run();
+          }
+
+          return textResponse('OK');
+        }
+
+        return textResponse('Method nicht erlaubt.', 405);
       }
 
-      // BESTEHENDE SEITE BEARBEITEN
+      // VERÖFFENTLICHTE SEITEN WEITERLEITEN
 
-      if (
-        request.method === 'PUT' &&
-        slug
-      ) {
-        const meta = await env.PAGES_KV.get(
-          `meta:${slug}`,
-          'json'
+      if (request.method === 'GET' && path) {
+        const saved = await env.PAGES_KV.get(
+          `page:${path}`
         );
 
-        if (!meta) {
-          return new Response(
-            'Seite nicht gefunden.',
-            { status: 404 }
+        if (saved !== null) {
+          const pagesOrigin = getPagesOrigin(env, url);
+
+          return redirect(
+            `${pagesOrigin}/${encodeURIComponent(path)}`,
+            302
           );
         }
 
-        if (meta.owner !== user.sub) {
-          return new Response(
-            'Nicht erlaubt.',
-            { status: 403 }
+        const legacy = await env.PAGES_KV.get(path);
+
+        if (legacy !== null) {
+          const pagesOrigin = getPagesOrigin(env, url);
+
+          return redirect(
+            `${pagesOrigin}/${encodeURIComponent(path)}`,
+            302
           );
         }
-
-        let body;
-
-        try {
-          body = await readJson(request, MAX_REQUEST_SIZE);
-        } catch (error) {
-          return new Response(
-            error.message === 'REQUEST_TOO_LARGE'
-              ? 'Projekt ist zu groß.'
-              : 'Ungültige Daten.',
-            { status: error.message === 'REQUEST_TOO_LARGE' ? 413 : 400 }
-          );
-        }
-
-        let project;
-
-        try {
-          project = validateProjectBody(body);
-        } catch (error) {
-          return new Response(
-            error.message,
-            { status: 400 }
-          );
-        }
-
-        await env.PAGES_KV.put(
-          `page:${slug}`,
-          combineProject(project)
-        );
-
-        await env.PAGES_KV.put(
-          `project:${slug}`,
-          JSON.stringify(project)
-        );
-
-        await env.PAGES_KV.put(
-          `meta:${slug}`,
-          JSON.stringify({
-            owner: user.sub,
-            updatedAt: Date.now()
-          })
-        );
-
-        return new Response('OK');
       }
 
-      // SEITE LÖSCHEN
-
-      if (
-        request.method === 'DELETE' &&
-        slug
-      ) {
-        const meta = await env.PAGES_KV.get(
-          `meta:${slug}`,
-          'json'
-        );
-
-        if (!meta) {
-          return new Response(
-            'Seite nicht gefunden.',
-            { status: 404 }
-          );
-        }
-
-        if (meta.owner !== user.sub) {
-          return new Response(
-            'Nicht erlaubt.',
-            { status: 403 }
-          );
-        }
-
-        await env.PAGES_KV.delete(`page:${slug}`);
-        await env.PAGES_KV.delete(`project:${slug}`);
-        await env.PAGES_KV.delete(`meta:${slug}`);
-        await env.PAGES_KV.delete(`owner:${user.sub}:${slug}`);
-
-        if (env.DB) {
-          await env.DB.prepare(
-            'DELETE FROM reserved_slugs WHERE slug=? AND owner_sub=?'
-          ).bind(slug, user.sub).run();
-        }
-
-        return new Response('OK');
-      }
+      // 404
 
       return new Response(
-        'Method nicht erlaubt.',
-        { status: 405 }
-      );
-    }
-
-    // VERÖFFENTLICHTE SEITEN WEITERLEITEN
-
-    if (request.method === 'GET' && path) {
-      const saved = await env.PAGES_KV.get(
-        `page:${path}`
-      );
-
-      if (saved !== null) {
-        const pagesOrigin = getPagesOrigin(env, url);
-
-        return redirect(
-          `${pagesOrigin}/${encodeURIComponent(path)}`,
-          302
-        );
-      }
-
-      const legacy = await env.PAGES_KV.get(path);
-
-      if (legacy !== null) {
-        const pagesOrigin = getPagesOrigin(env, url);
-
-        return redirect(
-          `${pagesOrigin}/${encodeURIComponent(path)}`,
-          302
-        );
-      }
-    }
-
-    // 404
-
-    return new Response(
-      shell(
-        '404',
-        `
+        shell(
+          '404',
+          `
 <section class="card">
 <h1>404</h1>
 <p>Diese Seite existiert nicht.</p>
 <a class="button" href="/">Zur Startseite</a>
 </section>`
-      ),
-      {
-        status: 404,
-        headers: privateHeaders()
-      }
-    );
+        ),
+        {
+          status: 404,
+          headers: privateHeaders()
+        }
+      );
+    } catch (error) {
+      console.error('Worker request failed:', error.name);
+
+      return textResponse(
+        'Interner Serverfehler. Bitte später erneut versuchen.',
+        500
+      );
+    }
   }
 };
